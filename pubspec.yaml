@@ -1,0 +1,48 @@
+name: my_new_app
+description: "Personal offline investment-tracking and analysis app."
+publish_to: none
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # ---------------------------------------------------------------------------
+  # Local database - Drift (SQLite)
+  # drift_flutter provides the platform-specific SQLite backend for all
+  # Flutter targets. No tables are defined yet; this just wires up the
+  # dependency so it resolves and the app builds cleanly.
+  # ---------------------------------------------------------------------------
+  drift: ^2.35.0
+  drift_flutter: ^0.3.1
+  intl: ^0.20.2
+  http: ^1.6.0
+  path_provider: ^2.1.6
+  archive: ^4.3.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+  # ---------------------------------------------------------------------------
+  # Drift code-generation tooling.
+  # When tables/queries are added in later steps, run:
+  #   dart run build_runner build --delete-conflicting-outputs
+  # ---------------------------------------------------------------------------
+  drift_dev: ^2.35.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/EQUITY_L.csv
+    - assets/nse_tickers.json
+    - assets/bse_tickers.json
