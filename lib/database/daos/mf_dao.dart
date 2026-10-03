@@ -2,15 +2,12 @@
 
 import 'package:drift/drift.dart';
 import '../app_database.dart';
-import '../tables/mf_cards_table.dart';
-import '../tables/mf_transactions_table.dart';
-import '../tables/tags_table.dart';
 
 part 'mf_dao.g.dart';
 
 @DriftAccessor(tables: [MfCards, MfTransactions, Tags, CardTags])
 class MfDao extends DatabaseAccessor<AppDatabase> with _$MfDaoMixin {
-  MfDao(AppDatabase db) : super(db);
+  MfDao(super.db);
 
   Future<List<MfCard>> getAllMfCards() => select(mfCards).get();
 
