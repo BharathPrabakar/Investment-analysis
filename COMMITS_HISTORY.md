@@ -5,6 +5,31 @@
 
 ---
 
+### `15a846b` — 2026-10-23
+**Message:** `feat: implement Phase 2 Demerger/Merger Wizard and Phase 3 Rights Issue and Tender Buyback badging`
+
+- **Phase 3: Rights Issues & Tender Buybacks Badging & Execution:**
+  - Added dedicated transaction modes in [lib/stocks/add_transaction_sheet.dart](file:///c:/my_new_app/lib/stocks/add_transaction_sheet.dart):
+    - `RIGHTS` (under BUY): for corporate rights issue allotment at discounted subscription prices.
+    - `BUYBACK` (under SELL): for tender buyback acceptances at fixed board offer prices.
+  - Bypassed daily secondary-market Bhavcopy price range validation for `RIGHTS` and `BUYBACK` entries since corporate actions occur off-market.
+  - Added custom UI badges and icons in [lib/stocks/stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart):
+    - Teal badge: `"RIGHTS ISSUE"` with `"+X shares allotted @ ₹Price"`.
+    - Deep orange badge: `"TENDER BUYBACK"` with `"-X shares accepted @ ₹Price"`.
+- **Phase 2: Special Corporate Action Wizard (Demergers & Mergers):**
+  - Created [lib/stocks/corporate_actions_wizard.dart](file:///c:/my_new_app/lib/stocks/corporate_actions_wizard.dart) accessible via the stock card detail top-right menu.
+  - **Demerger Flow:**
+    - Apportions parent cost basis according to official circular (e.g. 4.68% for Reliance $\rightarrow$ Jio Financial) under Section 49(2C) of the Indian Income Tax Act.
+    - Creates or populates the child stock card with the allotted shares and cost basis, and adjusts parent cost basis without corrupting historical buy dates.
+  - **Merger Flow:**
+    - Swaps shares using exchange swap ratio (e.g. 42 shares of HDFCBANK for 25 shares of HDFC).
+    - Transfers total invested capital and swapped shares to acquiring card, credits fractional entitlements as `FRACTIONAL_CASH`, and optionally extinguishes the source card.
+- **Tests & Documentation:**
+  - Added automated unit test in [test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart) verifying `RIGHTS` and `BUYBACK` ledger accounting and WAC preservation (18/18 tests passing).
+  - Updated [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) Section 6 and [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md) Section 8.
+
+---
+
 ### `c498fa6` — 2026-10-23
 **Message:** `fix: enforce strict ex-date holding eligibility and sanitize dividend cache from split announcements`
 
