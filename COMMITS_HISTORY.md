@@ -5,6 +5,25 @@
 
 ---
 
+### `c498fa6` — 2026-10-23
+**Message:** `fix: enforce strict ex-date holding eligibility and sanitize dividend cache from split announcements`
+
+- **Strict Ex-Date Holding Eligibility:**
+  - Fixed eligibility calculation in [lib/stocks/stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart): shares purchased on or after the Ex-Date (`tDate >= eventDate`) are strictly ineligible for dividends, bonus issues, and stock splits.
+  - Sells on the Ex-Date preserve entitlements for shares settled prior to the Ex-Date.
+- **Cache Sanitization Against Corrupted Split Misclassifications:**
+  - Hardened cache loaders in [lib/services/dividend_source.dart](file:///c:/my_new_app/lib/services/dividend_source.dart) (`fetchDividends` and `fetchBonusIssues`):
+    - Reads through cached events and automatically purges any item matching split/subdivision announcements unless explicit per-share dividend keywords exist.
+    - Discards pseudo-bonuses from Yahoo Finance matching known stock splits.
+    - Overwrites sanitized lists back to disk (`div_*.json`, `bonus_*.json`), permanently cleaning corrupt disk records (such as IRCTC's bogus ₹12 dividend).
+- **Same-Day Precedence Correction:**
+  - Updated `compareTransactions` in [lib/logic/stock_logic.dart](file:///c:/my_new_app/lib/logic/stock_logic.dart): Rank 0 (`SPLIT`, `BONUS`, `CONSOLIDATION`), Rank 1 (`BUY`), Rank 2 (`SELL`), Rank 3 (`DIVIDEND`, `FRACTIONAL_CASH`).
+- **Tests & Documentation:**
+  - Updated [test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart) (all 17 tests passing).
+  - Updated [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) Section 6.
+
+---
+
 ### `058424b` — 2026-10-23
 **Message:** `feat: implement edgecase fixes for reverse splits, fractional cash, circuit tolerance, and order precedence`
 
