@@ -5,6 +5,30 @@
 
 ---
 
+### `058424b` — 2026-10-23
+**Message:** `feat: implement edgecase fixes for reverse splits, fractional cash, circuit tolerance, and order precedence`
+
+- **Reverse Stock Splits / Consolidations:**
+  - Updated `parseSplitRatio` in [lib/services/dividend_source.dart](file:///c:/my_new_app/lib/services/dividend_source.dart) to detect consolidation ratios and reverse splits where face value increases (`oldFaceValue < newFaceValue` or `consolidation X:1`).
+  - Added `CONSOLIDATION` transaction handling in [lib/logic/stock_logic.dart](file:///c:/my_new_app/lib/logic/stock_logic.dart): reduces held shares without reducing invested capital, proportionally raising weighted average cost ($WAC = Invested / Qty$).
+  - Added DAO lookup methods `hasConsolidationTransaction` and `findConsolidationTransaction` in [lib/database/daos/stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart).
+  - Auto-reconciliation in [lib/stocks/stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart) auto-inserts `CONSOLIDATION` transactions with custom amber UI badge (`"-X shares merged · Reverse split (capital preserved)"`).
+- **Fractional Bonus Entitlements in Cash (`FRACTIONAL_CASH`):**
+  - When bonus share ratios produce fractional Demat shares, integer shares are credited via `BONUS` and fractional entitlements are computed and auto-recorded as `FRACTIONAL_CASH` transactions with payout amounts based on holding cost basis.
+  - Added `hasFractionalCashTransaction` and `findFractionalCashTransaction` in [lib/database/daos/stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart).
+  - Included `FRACTIONAL_CASH` in cash return / dividend totals without modifying share counts.
+  - Rendered with green UI badge (`"Fractional bonus entitlement settled in cash"` and `+ ₹Amount`).
+- **Circuit Freeze Days Tolerance:**
+  - Added `containsPrice(double price)` to `PriceRange` in [lib/services/price_service.dart](file:///c:/my_new_app/lib/services/price_service.dart): provides $\pm 0.2\%$ tolerance (clamped between 5 paise and ₹5.00) on lower/upper circuit freeze days where high equals low in Bhavcopy.
+  - Applied to [lib/stocks/add_transaction_sheet.dart](file:///c:/my_new_app/lib/stocks/add_transaction_sheet.dart) and [lib/stocks/create_stock_card_flow.dart](file:///c:/my_new_app/lib/stocks/create_stock_card_flow.dart).
+- **Same-Day Order Precedence & Replay Safety:**
+  - Ranked order in `compareTransactions`: Rank 1 (`SPLIT`, `BONUS`, `CONSOLIDATION`), Rank 2 (`BUY`), Rank 3 (`SELL`), Rank 4 (`DIVIDEND`, `FRACTIONAL_CASH`).
+- **Automated Unit Tests & Documentation:**
+  - Added 5 new unit tests in [test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart) covering consolidation parsing, ledger math, fractional cash handling, and DAO operations (17/17 passing).
+  - Updated [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) Section 6.
+
+---
+
 ### `c1c52bb` — 2026-10-23
 **Message:** `fix: prevent false dividends and duplicate bonuses from stock sub-division corporate actions`
 
