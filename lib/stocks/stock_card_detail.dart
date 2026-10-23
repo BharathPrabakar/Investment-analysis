@@ -139,12 +139,13 @@ class StockCardDetailState extends State<StockCardDetail> {
         }).toList();
 
         for (final split in splitsOnDate) {
-          final txsUpToDate = txRecords.where((t) {
+          // Indian Equities Rule: To participate in split/consolidation, shares must be held before ex-date.
+          final txsPriorToExDate = txRecords.where((t) {
             final tDate = DateTime(t.date.year, t.date.month, t.date.day);
-            return !tDate.isAfter(curDate);
+            return tDate.isBefore(curDate);
           }).toList();
 
-          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final holdingAsOf = computeHoldingState(txsPriorToExDate);
           final existingSplit = await dao.findSplitTransaction(
             cardId: currentCard.id,
             date: split.recordDate,
@@ -264,12 +265,13 @@ class StockCardDetailState extends State<StockCardDetail> {
             continue;
           }
 
-          final txsUpToDate = txRecords.where((t) {
+          // Indian Equities Rule: To receive bonus shares, shares must be held before ex-date.
+          final txsPriorToExDate = txRecords.where((t) {
             final tDate = DateTime(t.date.year, t.date.month, t.date.day);
-            return !tDate.isAfter(curDate);
+            return tDate.isBefore(curDate);
           }).toList();
 
-          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final holdingAsOf = computeHoldingState(txsPriorToExDate);
           final existingBonus = await dao.findBonusTransaction(
             cardId: currentCard.id,
             date: bonus.recordDate,
@@ -383,12 +385,14 @@ class StockCardDetailState extends State<StockCardDetail> {
         }).toList();
 
         for (final ev in dividendsOnDate) {
-          final txsUpToDate = txRecords.where((t) {
+          // Indian Equities Rule: To receive a dividend, shares must be held before the ex-date.
+          // Shares bought on or after the ex-date (curDate) are NOT eligible.
+          final txsPriorToExDate = txRecords.where((t) {
             final tDate = DateTime(t.date.year, t.date.month, t.date.day);
-            return !tDate.isAfter(curDate);
+            return tDate.isBefore(curDate);
           }).toList();
 
-          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final holdingAsOf = computeHoldingState(txsPriorToExDate);
           final existingDiv = await dao.findDividendTransaction(
             cardId: currentCard.id,
             date: ev.recordDate,

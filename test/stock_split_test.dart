@@ -204,9 +204,9 @@ void main() {
       final sell = TxRecord(id: 4, date: sameDate, type: 'SELL', price: 110, quantity: 5, totalAmount: 550);
       final div = TxRecord(id: 5, date: sameDate, type: 'DIVIDEND', price: 5, quantity: 10, totalAmount: 50);
 
-      expect(compareTransactions(buy, split), -1); // BUY (0) before SPLIT (1)
-      expect(compareTransactions(split, sell), -1); // SPLIT (1) before SELL (2)
-      expect(compareTransactions(bonus, sell), -1); // BONUS (1) before SELL (2)
+      expect(compareTransactions(split, buy), -1); // SPLIT (0) before BUY (1)
+      expect(compareTransactions(bonus, buy), -1); // BONUS (0) before BUY (1)
+      expect(compareTransactions(buy, sell), -1);   // BUY (1) before SELL (2)
       expect(compareTransactions(sell, div), -1);   // SELL (2) before DIVIDEND (3)
     });
 

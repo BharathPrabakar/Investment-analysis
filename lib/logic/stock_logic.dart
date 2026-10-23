@@ -63,11 +63,11 @@ int compareTransactions(TxRecord a, TxRecord b) {
   if (a.type != b.type) {
     int rank(String type) {
       switch (type.toUpperCase()) {
-        case 'BUY':
-          return 0;
         case 'SPLIT':
         case 'BONUS':
         case 'CONSOLIDATION':
+          return 0;
+        case 'BUY':
           return 1;
         case 'SELL':
           return 2;

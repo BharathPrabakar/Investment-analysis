@@ -384,13 +384,30 @@ class DividendSource {
     final cacheFile = File('${cacheDir.path}/div_${cleanExchange}_$cleanTicker.json');
 
     List<DividendEvent> cached = [];
+    bool cacheDirty = false;
     if (await cacheFile.exists()) {
       try {
         final jsonStr = await cacheFile.readAsString();
         final rawList = jsonDecode(jsonStr) as List<dynamic>;
-        cached = rawList
-            .map((e) => DividendEvent.fromJson(e as Map<String, dynamic>))
-            .toList();
+        for (final item in rawList) {
+          final ev = DividendEvent.fromJson(item as Map<String, dynamic>);
+          final lowerPurpose = ev.purpose.toLowerCase();
+          final isSplit = lowerPurpose.contains('split') ||
+              lowerPurpose.contains('sub-division') ||
+              lowerPurpose.contains('sub division') ||
+              lowerPurpose.contains('subdivision');
+          final isRealDiv = lowerPurpose.contains('dividend') ||
+              lowerPurpose.contains('interim') ||
+              lowerPurpose.contains('final') ||
+              lowerPurpose.contains('special') ||
+              RegExp(r'\bdiv\b').hasMatch(lowerPurpose);
+          
+          if (isSplit && !isRealDiv) {
+            cacheDirty = true;
+            continue; // Drop corrupt split misclassification from cache
+          }
+          cached.add(ev);
+        }
       } catch (e) {
         developer.log('Error reading dividend cache for $cleanTicker: $e', name: 'DividendSource');
       }
@@ -423,7 +440,12 @@ class DividendSource {
       return merged;
     } catch (e) {
       developer.log('Dividend fetch failed for $cleanTicker ($cleanExchange): $e', name: 'DividendSource');
-      // Graceful degradation: return cached data on failure
+      // Graceful degradation: return sanitized cached data on failure
+      if (cacheDirty) {
+        try {
+          await cacheFile.writeAsString(jsonEncode(cached.map((e) => e.toJson()).toList()));
+        } catch (_) {}
+      }
       return cached;
     }
   }
@@ -680,6 +702,7 @@ class DividendSource {
 
     try {
       final List<BonusEvent> fetched = [];
+      List<SplitEvent> splitEvents = [];
 
       // 1. Try Exchange Corporate Actions
       try {
@@ -696,7 +719,7 @@ class DividendSource {
       // Note: Yahoo represents both bonus issues and splits under events=split.
       // Exchange corporate action feeds (NSE/BSE) are the authoritative source.
       try {
-        final splitEvents = await fetchStockSplits(cleanTicker, exchange: cleanExchange, scripCode: scripCode);
+        splitEvents = await fetchStockSplits(cleanTicker, exchange: cleanExchange, scripCode: scripCode);
         final yEvents = await _fetchYahooBonus(cleanTicker, exchange: cleanExchange);
         for (final yb in yEvents) {
           final alreadyPresentInBonus = fetched.any((fb) =>
@@ -718,8 +741,15 @@ class DividendSource {
       // Merge fetched with cached
       final map = <String, BonusEvent>{};
       for (final ev in cached) {
-        final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.bonusShares}_${ev.existingShares}';
-        map[key] = ev;
+        // Discard any cached bonus events if they match a known stock split
+        final isActuallySplit = splitEvents.any((sp) =>
+            sp.recordDate.year == ev.recordDate.year &&
+            sp.recordDate.month == ev.recordDate.month &&
+            (sp.recordDate.day - ev.recordDate.day).abs() <= 2);
+        if (!isActuallySplit) {
+          final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.bonusShares}_${ev.existingShares}';
+          map[key] = ev;
+        }
       }
       for (final ev in fetched) {
         final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.bonusShares}_${ev.existingShares}';
@@ -729,10 +759,10 @@ class DividendSource {
       final merged = map.values.toList()
         ..sort((a, b) => a.recordDate.compareTo(b.recordDate));
 
-      if (merged.isNotEmpty) {
+      if (merged.isNotEmpty || cached.isNotEmpty) {
         await cacheFile.writeAsString(jsonEncode(merged.map((e) => e.toJson()).toList()));
       }
-      return merged.isNotEmpty ? merged : cached;
+      return merged;
     } catch (e) {
       return cached;
     }
