@@ -6,11 +6,13 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../data/local_tickers.dart';
+import '../utils/app_constants.dart';
 import 'price_service.dart';
 
 class _BseDayBhavcopyData {
@@ -53,6 +55,21 @@ class BseBhavcopySource {
   // In-memory cache for fast lookup during the current app run: "YYYYMMDD" -> _BseDayBhavcopyData
   static final Map<String, _BseDayBhavcopyData> _memoryCache = {};
 
+  /// BSE migrated to UDiFF format in 2024. Prior dates use legacy EQ{DD}{MM}{YY}_CSV.ZIP.
+  static final DateTime bseUdiffCutoff = kBseUdiffCutoff;
+
+  static String getBseBhavcopyUrl(DateTime date) {
+    if (!date.isBefore(bseUdiffCutoff)) {
+      final dateKey = _formatDate(date);
+      return 'https://www.bseindia.com/download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_${dateKey}_F_0000.CSV';
+    } else {
+      final dd = DateFormat('dd').format(date);
+      final mm = DateFormat('MM').format(date);
+      final yy = DateFormat('yy').format(date);
+      return 'https://www.bseindia.com/download/BhavCopy/Equity/EQ$dd$mm${yy}_CSV.ZIP';
+    }
+  }
+
   /// Format date as YYYYMMDD
   static String _formatDate(DateTime date) => DateFormat('yyyyMMdd').format(date);
 
@@ -65,15 +82,19 @@ class BseBhavcopySource {
   }) async {
     final dateKey = _formatDate(date);
     final target = tickerOrScrip.trim().toUpperCase();
+
+    // Resolve scripCode and ISIN from local ticker info if target is a symbol
+    final info = await getTickerInfoBySymbol(target, exchange: 'BSE');
+    final targetScrip = info?.scripCode?.toUpperCase() ?? (int.tryParse(target) != null ? target : null);
     final targetIsin = (isin?.trim().isNotEmpty == true)
         ? isin!.trim().toUpperCase()
-        : (await getIsinForSymbol(target, exchange: 'BSE'))?.toUpperCase();
+        : (info?.isin.toUpperCase() ?? (await getIsinForSymbol(target, exchange: 'BSE'))?.toUpperCase());
 
     // 1. Check in-memory cache
     if (_memoryCache.containsKey(dateKey)) {
       final dayData = _memoryCache[dateKey]!;
       final range = dayData.find(
-        scripCode: target,
+        scripCode: targetScrip ?? target,
         symbol: target,
         isin: targetIsin,
       );
@@ -131,7 +152,7 @@ class BseBhavcopySource {
         _memoryCache[dateKey] = dayData;
 
         final range = dayData.find(
-          scripCode: target,
+          scripCode: targetScrip ?? target,
           symbol: target,
           isin: targetIsin,
         );
@@ -146,7 +167,12 @@ class BseBhavcopySource {
     }
 
     // 3. Download from BSE archives
-    return _downloadAndParseBhavcopy(date, target: target, targetIsin: targetIsin);
+    return _downloadAndParseBhavcopy(
+      date,
+      target: target,
+      targetScrip: targetScrip,
+      targetIsin: targetIsin,
+    );
   }
 
   /// Downloads and caches the Bhavcopy for [date] if not already cached.
@@ -166,15 +192,15 @@ class BseBhavcopySource {
   static Future<PriceRange> _downloadAndParseBhavcopy(
     DateTime date, {
     String? target,
+    String? targetScrip,
     String? targetIsin,
   }) async {
     final dateKey = _formatDate(date);
     final cacheDir = await _getCacheDirectory();
     final cacheFile = File('${cacheDir.path}/bse_bhavcopy_$dateKey.json');
 
-    // Official BSE CM UDiFF Bhavcopy CSV URL
-    final url =
-        'https://www.bseindia.com/download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_${dateKey}_F_0000.CSV';
+    final isUdiff = !date.isBefore(bseUdiffCutoff);
+    final url = getBseBhavcopyUrl(date);
     final uri = Uri.parse(url);
 
     final http.Response response;
@@ -203,25 +229,51 @@ class BseBhavcopySource {
           'BSE server returned HTTP ${response.statusCode} for Bhavcopy $dateKey');
     }
 
-    // Check if BSE returned an HTML page (e.g. holiday or 404 disguised as 200)
-    final body = response.body.trim();
-    if (body.startsWith('<!DOCTYPE') || body.startsWith('<html') || !body.startsWith('TradDt')) {
-      throw PriceFetchException('BSE Bhavcopy not available for date $dateKey');
+    String csvContent;
+    if (isUdiff) {
+      final body = response.body.trim();
+      if (body.startsWith('<!DOCTYPE') || body.startsWith('<html') || !body.startsWith('TradDt')) {
+        throw PriceFetchException('BSE Bhavcopy not available for date $dateKey');
+      }
+      csvContent = body;
+    } else {
+      // Legacy ZIP archive
+      try {
+        final archive = ZipDecoder().decodeBytes(response.bodyBytes);
+        final csvArchiveFile = archive.files.firstWhere(
+          (f) => f.name.toLowerCase().endsWith('.csv'),
+          orElse: () => throw PriceFetchException('No CSV file found inside BSE archive for $dateKey'),
+        );
+        csvContent = utf8.decode(csvArchiveFile.content as List<int>);
+      } catch (e) {
+        if (e is PriceFetchException) rethrow;
+        throw PriceFetchException('Failed to extract BSE Bhavcopy ZIP for $dateKey: $e');
+      }
     }
 
     try {
-      final lines = const LineSplitter().convert(body);
+      final lines = const LineSplitter().convert(csvContent);
       if (lines.isEmpty) {
         throw PriceFetchException('Empty BSE Bhavcopy for $dateKey');
       }
 
       final headers = _parseCsvLine(lines[0]);
-      final scripIdx = headers.indexOf('FinInstrmId');
-      final symbolIdx = headers.indexOf('TckrSymb');
+      // Support both modern UDiFF (FinInstrmId, HghPric, LwPric) and legacy (SC_CODE, HIGH, LOW)
+      var scripIdx = headers.indexOf('FinInstrmId');
+      if (scripIdx == -1) scripIdx = headers.indexOf('SC_CODE');
+
+      var symbolIdx = headers.indexOf('TckrSymb');
+      if (symbolIdx == -1) symbolIdx = headers.indexOf('SC_NAME');
+
       final isinIdx = headers.indexOf('ISIN');
       final typeIdx = headers.indexOf('FinInstrmTp');
-      final highIdx = headers.indexOf('HghPric');
-      final lowIdx = headers.indexOf('LwPric');
+      final scTypeIdx = headers.indexOf('SC_TYPE');
+
+      var highIdx = headers.indexOf('HghPric');
+      if (highIdx == -1) highIdx = headers.indexOf('HIGH');
+
+      var lowIdx = headers.indexOf('LwPric');
+      if (lowIdx == -1) lowIdx = headers.indexOf('LOW');
 
       if (scripIdx == -1 || highIdx == -1 || lowIdx == -1) {
         throw PriceFetchException('Unexpected BSE Bhavcopy CSV column format for $dateKey');
@@ -246,8 +298,11 @@ class BseBhavcopySource {
           continue;
         }
 
-        // Only parse STK (equities) if type column exists
+        // Filter: UDiFF uses FinInstrmTp == 'STK'; legacy format uses SC_TYPE == 'Q'
         if (typeIdx != -1 && cols.length > typeIdx && cols[typeIdx].trim() != 'STK') {
+          continue;
+        }
+        if (scTypeIdx != -1 && cols.length > scTypeIdx && cols[scTypeIdx].trim().toUpperCase() != 'Q') {
           continue;
         }
 
@@ -291,7 +346,7 @@ class BseBhavcopySource {
 
       if (target != null) {
         final range = dayData.find(
-          scripCode: target,
+          scripCode: targetScrip ?? target,
           symbol: target,
           isin: targetIsin,
         );

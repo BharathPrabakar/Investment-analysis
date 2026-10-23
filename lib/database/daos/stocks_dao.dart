@@ -1,6 +1,7 @@
 // lib/database/daos/stocks_dao.dart
 
 import 'package:drift/drift.dart';
+import '../../utils/app_constants.dart';
 import '../app_database.dart';
 
 part 'stocks_dao.g.dart';
@@ -152,6 +153,12 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
   Future<int> deleteTransaction(int txId) =>
       (delete(stockTransactions)..where((t) => t.id.equals(txId))).go();
 
+  /// Delete all auto-generated transactions (DIVIDEND, BONUS with entryMode = 'AUTO') for a card.
+  Future<int> deleteAutoTransactionsForCard(int cardId) =>
+      (delete(stockTransactions)
+            ..where((t) => t.cardId.equals(cardId) & t.entryMode.equals('AUTO')))
+          .go();
+
   /// Find a possible duplicate: same card, same date (date only), same price, same type.
   Future<StockTransaction?> findDuplicate({
     required int cardId,
@@ -177,9 +184,23 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
     required DateTime date,
     required double price,
   }) async {
+    final existing = await findDividendTransaction(
+      cardId: cardId,
+      date: date,
+      price: price,
+    );
+    return existing != null;
+  }
+
+  /// Finds an existing dividend transaction for this card, date, and price (per-share dividend).
+  Future<StockTransaction?> findDividendTransaction({
+    required int cardId,
+    required DateTime date,
+    required double price,
+  }) async {
     final dateStart = DateTime(date.year, date.month, date.day);
     final dateEnd = dateStart.add(const Duration(days: 1));
-    final existing = await (select(stockTransactions)
+    return (select(stockTransactions)
           ..where((t) =>
               t.cardId.equals(cardId) &
               t.type.equals('DIVIDEND') &
@@ -187,7 +208,34 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
               t.date.isSmallerThanValue(dateEnd) &
               t.price.equals(price)))
         .getSingleOrNull();
+  }
+
+  /// Checks if a bonus transaction already exists for this card and date.
+  Future<bool> hasBonusTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final existing = await findBonusTransaction(
+      cardId: cardId,
+      date: date,
+    );
     return existing != null;
+  }
+
+  /// Finds an existing bonus transaction for this card and date.
+  Future<StockTransaction?> findBonusTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final dateStart = DateTime(date.year, date.month, date.day);
+    final dateEnd = dateStart.add(const Duration(days: 1));
+    return (select(stockTransactions)
+          ..where((t) =>
+              t.cardId.equals(cardId) &
+              t.type.equals('BONUS') &
+              t.date.isBiggerOrEqualValue(dateStart) &
+              t.date.isSmallerThanValue(dateEnd)))
+        .getSingleOrNull();
   }
 
   /// Merge into an existing transaction (duplicate merge).
@@ -312,8 +360,8 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
       if (trimmed.isEmpty) {
         throw ArgumentError('Tag name cannot be empty.');
       }
-      if (trimmed.length > 30) {
-        throw ArgumentError('Tag name cannot exceed 30 characters.');
+      if (trimmed.length > kMaxTagLength) {
+        throw ArgumentError('Tag name cannot exceed $kMaxTagLength characters.');
       }
 
       // Check if tag already exists case-insensitively

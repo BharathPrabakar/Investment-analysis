@@ -15,7 +15,7 @@ import '../database/app_database.dart';
 import '../providers/database_provider.dart';
 import '../services/price_service.dart';
 import '../services/trading_day_service.dart';
-import 'widgets/tag_chip.dart';
+import '../widgets/tag_chip.dart';
 
 class CreateStockCardFlow extends StatefulWidget {
   const CreateStockCardFlow({super.key});
@@ -230,7 +230,7 @@ class _Step1TickerSearchState extends State<_Step1TickerSearch> {
                 controller: _ctrl,
                 autofocus: true,
                 decoration: InputDecoration(
-                  hintText: 'Search by symbol, scrip code or company…',
+                  hintText: 'Search by symbol or company…',
                   prefixIcon: const Icon(Icons.search),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                   filled: true,
@@ -270,9 +270,14 @@ class _Step1TickerSearchState extends State<_Step1TickerSearch> {
                           final cardKey = '${t.exchange.toUpperCase()}:${t.symbol.toUpperCase()}';
                           final isAlreadyAdded = existingCardKeys.contains(cardKey);
 
-                          final subtitleText = t.exchange == 'BSE' && t.scripCode != null && t.scripCode!.isNotEmpty
-                              ? '${t.companyName} · Scrip: ${t.scripCode}'
-                              : t.companyName;
+                          final metaParts = <String>[t.companyName];
+                          if (t.scripCode != null && t.scripCode!.isNotEmpty) {
+                            metaParts.add('Code: ${t.scripCode}');
+                          }
+                          if (t.isin.isNotEmpty) {
+                            metaParts.add('ISIN: ${t.isin}');
+                          }
+                          final subtitleText = metaParts.join(' · ');
 
                           if (isAlreadyAdded) {
                             return ListTile(

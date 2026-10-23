@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../utils/app_constants.dart';
 import '../utils/market_calendar.dart';
 import 'bse_bhavcopy_source.dart';
 import 'nse_bhavcopy_source.dart';
@@ -56,7 +57,7 @@ class TradingDayService {
   static set instance(TradingDayService service) => _instance = service;
   static TradingDayService _instance = TradingDayService();
 
-  static const String _defaultTicker = 'RELIANCE';
+  static const String _defaultTicker = kTradingDayProbeTicker;
 
   // In-memory cache of verified closed dates ("YYYYMMDD")
   static final Set<String> _closedDatesCache = {};
@@ -163,7 +164,7 @@ class TradingDayService {
     final nowIst = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
 
     // If current IST time is before 9:15 AM -> return/throw market hasn't opened yet
-    final marketOpenIst = DateTime.utc(nowIst.year, nowIst.month, nowIst.day, 9, 15);
+    final marketOpenIst = DateTime.utc(nowIst.year, nowIst.month, nowIst.day, kMarketOpenHourIst, kMarketOpenMinuteIst);
     if (nowIst.isBefore(marketOpenIst)) {
       return const TradingDayResult(
         status: TradingDayStatus.unknown,
@@ -303,8 +304,8 @@ class TradingDayService {
     };
 
     if (isBse) {
-      final url =
-          'https://www.bseindia.com/download/BhavCopy/Equity/BhavCopy_BSE_CM_0_0_0_${dateKey}_F_0000.CSV';
+      final isUdiff = !date.isBefore(BseBhavcopySource.bseUdiffCutoff);
+      final url = BseBhavcopySource.getBseBhavcopyUrl(date);
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
           final response = await client.get(
@@ -316,9 +317,16 @@ class TradingDayService {
           ).timeout(const Duration(seconds: 15));
 
           if (response.statusCode == 200) {
-            final body = response.body.trim();
-            if (body.startsWith('<!DOCTYPE') || body.startsWith('<html') || body.length < 200) {
-              return 404; // BSE returns HTML error page on closed days
+            if (isUdiff) {
+              final body = response.body.trim();
+              if (body.startsWith('<!DOCTYPE') || body.startsWith('<html') || body.length < 200) {
+                return 404; // BSE returns HTML error page on closed days
+              }
+            } else {
+              // Legacy ZIP archive: check that it contains a valid zip header or has content
+              if (response.bodyBytes.length < 50) {
+                return 404;
+              }
             }
             try {
               await BseBhavcopySource.ensureBhavcopyCached(date);

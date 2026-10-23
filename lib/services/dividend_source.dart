@@ -52,7 +52,53 @@ class DividendEvent {
       'DividendEvent(recordDate: ${DateFormat('yyyy-MM-dd').format(recordDate)}, amount: ₹$amountPerShare, purpose: "$purpose", source: $source)';
 }
 
-/// Service to fetch and parse dividend announcements from NSE and BSE.
+/// A single bonus issue announcement for a company.
+class BonusEvent {
+  /// Record date / Ex-date of the bonus issue.
+  final DateTime recordDate;
+
+  /// Number of bonus shares issued per [existingShares] held (e.g. 1 in a 1:1 or 1:2 bonus).
+  final int bonusShares;
+
+  /// Number of existing shares required (e.g. 1 in a 1:1, or 2 in a 1:2 bonus).
+  final int existingShares;
+
+  /// Raw description or purpose (e.g. "Bonus Issue 1:1").
+  final String purpose;
+
+  /// Source exchange ("NSE", "BSE", or "YAHOO").
+  final String source;
+
+  const BonusEvent({
+    required this.recordDate,
+    required this.bonusShares,
+    required this.existingShares,
+    required this.purpose,
+    required this.source,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'recordDate': recordDate.toIso8601String(),
+        'bonusShares': bonusShares,
+        'existingShares': existingShares,
+        'purpose': purpose,
+        'source': source,
+      };
+
+  factory BonusEvent.fromJson(Map<String, dynamic> json) => BonusEvent(
+        recordDate: DateTime.parse(json['recordDate'] as String),
+        bonusShares: json['bonusShares'] as int,
+        existingShares: json['existingShares'] as int,
+        purpose: json['purpose'] as String? ?? '',
+        source: json['source'] as String? ?? '',
+      );
+
+  @override
+  String toString() =>
+      'BonusEvent(recordDate: ${DateFormat('yyyy-MM-dd').format(recordDate)}, ratio: $bonusShares:$existingShares, purpose: "$purpose", source: $source)';
+}
+
+/// Service to fetch and parse dividend and corporate action announcements from NSE, BSE, and Yahoo.
 class DividendSource {
   static const Duration timeoutDuration = Duration(seconds: 15);
 
@@ -61,6 +107,29 @@ class DividendSource {
 
   /// Optional cache directory override for testing.
   static Directory? cacheDirOverrideForTesting;
+
+  /// Parses bonus ratio from an announcement purpose string.
+  /// Examples:
+  /// - "Bonus Issue 1:1" -> (bonus: 1, existing: 1)
+  /// - "Bonus 1:2" -> (bonus: 1, existing: 2)
+  /// - "Bonus 2:1" -> (bonus: 2, existing: 1)
+  /// - "Bonus Issue 4:3" -> (bonus: 4, existing: 3)
+  static ({int bonus, int existing})? parseBonusRatio(String purpose) {
+    if (purpose.trim().isEmpty) return null;
+    final regex = RegExp(
+      r'bonus.*?\b(\d+)\s*:\s*(\d+)\b',
+      caseSensitive: false,
+    );
+    final match = regex.firstMatch(purpose);
+    if (match != null) {
+      final b = int.tryParse(match.group(1) ?? '');
+      final e = int.tryParse(match.group(2) ?? '');
+      if (b != null && e != null && b > 0 && e > 0) {
+        return (bonus: b, existing: e);
+      }
+    }
+    return null;
+  }
 
   /// Parses per-share dividend amount from an announcement description string.
   /// Examples:
@@ -411,5 +480,248 @@ class DividendSource {
     }
 
     return events;
+  }
+
+  // ─── Bonus Issues Fetcher ────────────────────────────────────────────────────
+
+  /// Fetches historical bonus issue announcements for [ticker] on [exchange].
+  ///
+  /// Uses disk cache for offline access and queries NSE/BSE corporate actions,
+  /// falling back to Yahoo Finance splits/bonus data.
+  static Future<List<BonusEvent>> fetchBonusIssues(
+    String ticker, {
+    String exchange = 'NSE',
+    String? scripCode,
+  }) async {
+    final cleanTicker = ticker.trim().toUpperCase();
+    final cleanExchange = exchange.trim().toUpperCase();
+
+    final cacheDir = await _getCacheDirectory();
+    final cacheFile = File('${cacheDir.path}/bonus_${cleanExchange}_$cleanTicker.json');
+
+    List<BonusEvent> cached = [];
+    if (await cacheFile.exists()) {
+      try {
+        final jsonStr = await cacheFile.readAsString();
+        final rawList = jsonDecode(jsonStr) as List<dynamic>;
+        cached = rawList
+            .map((e) => BonusEvent.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (e) {
+        developer.log('Error reading bonus cache for $cleanTicker: $e', name: 'DividendSource');
+      }
+    }
+
+    try {
+      final List<BonusEvent> fetched = [];
+
+      // 1. Try Exchange Corporate Actions
+      try {
+        if (cleanExchange == 'BSE') {
+          fetched.addAll(await _fetchBseBonus(cleanTicker, scripCode: scripCode));
+        } else {
+          fetched.addAll(await _fetchNseBonus(cleanTicker));
+        }
+      } catch (e) {
+        developer.log('Exchange bonus fetch failed for $cleanTicker: $e', name: 'DividendSource');
+      }
+
+      // 2. Query Yahoo Finance fallback
+      try {
+        final yEvents = await _fetchYahooBonus(cleanTicker, exchange: cleanExchange);
+        for (final yb in yEvents) {
+          final alreadyPresent = fetched.any((fb) =>
+              fb.recordDate.year == yb.recordDate.year &&
+              fb.recordDate.month == yb.recordDate.month &&
+              (fb.recordDate.day - yb.recordDate.day).abs() <= 2);
+          if (!alreadyPresent) {
+            fetched.add(yb);
+          }
+        }
+      } catch (e) {
+        developer.log('Yahoo bonus fetch error for $cleanTicker: $e', name: 'DividendSource');
+      }
+
+      // Merge fetched with cached
+      final map = <String, BonusEvent>{};
+      for (final ev in cached) {
+        final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.bonusShares}_${ev.existingShares}';
+        map[key] = ev;
+      }
+      for (final ev in fetched) {
+        final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.bonusShares}_${ev.existingShares}';
+        map[key] = ev;
+      }
+
+      final merged = map.values.toList()
+        ..sort((a, b) => a.recordDate.compareTo(b.recordDate));
+
+      if (merged.isNotEmpty) {
+        await cacheFile.writeAsString(jsonEncode(merged.map((e) => e.toJson()).toList()));
+      }
+      return merged.isNotEmpty ? merged : cached;
+    } catch (e) {
+      return cached;
+    }
+  }
+
+  static Future<List<BonusEvent>> _fetchNseBonus(String symbol) async {
+    final client = httpClient ?? http.Client();
+    final apiUri = Uri.parse(
+        'https://www.nseindia.com/api/corporates-corporateActions?index=equities&symbol=${Uri.encodeComponent(symbol)}');
+
+    final apiResp = await client.get(
+      apiUri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Referer': 'https://www.nseindia.com/',
+      },
+    ).timeout(timeoutDuration);
+
+    if (apiResp.statusCode != 200) return [];
+    final rawData = jsonDecode(apiResp.body);
+    final List<dynamic> list;
+    if (rawData is List) {
+      list = rawData;
+    } else if (rawData is Map && rawData.containsKey('data')) {
+      list = rawData['data'] as List<dynamic>;
+    } else {
+      list = [];
+    }
+
+    final events = <BonusEvent>[];
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final subject = (item['subject'] ?? item['purpose'] ?? '').toString();
+      final ratio = parseBonusRatio(subject);
+      if (ratio == null) continue;
+
+      final recDateStr = (item['recDate'] ?? item['recDt'])?.toString();
+      final exDateStr = (item['exDate'] ?? item['exDt'])?.toString();
+      final recordDate = parseMarketDate(recDateStr) ?? parseMarketDate(exDateStr);
+      if (recordDate == null) continue;
+
+      events.add(BonusEvent(
+        recordDate: recordDate,
+        bonusShares: ratio.bonus,
+        existingShares: ratio.existing,
+        purpose: subject,
+        source: 'NSE',
+      ));
+    }
+    return events;
+  }
+
+  static Future<List<BonusEvent>> _fetchBseBonus(
+    String ticker, {
+    String? scripCode,
+  }) async {
+    String? effectiveScrip = scripCode;
+    if (effectiveScrip == null || effectiveScrip.isEmpty) {
+      final info = await getTickerInfoBySymbol(ticker, exchange: 'BSE');
+      effectiveScrip = info?.scripCode ?? (int.tryParse(ticker) != null ? ticker : null);
+    }
+    if (effectiveScrip == null || effectiveScrip.isEmpty) return [];
+
+    final client = httpClient ?? http.Client();
+    final apiUri = Uri.parse(
+      'https://api.bseindia.com/BseIndiaAPI/api/CorporateAction/w?'
+      'strCat=B&strPrevDate=20150101&strScrip=&strSearch=S&strToDate=20301231&strType=C&scripcode=$effectiveScrip',
+    );
+
+    final apiResp = await client.get(
+      apiUri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://www.bseindia.com/corporates/corporate_act.aspx',
+      },
+    ).timeout(timeoutDuration);
+
+    if (apiResp.statusCode != 200) return [];
+    final rawData = jsonDecode(apiResp.body);
+    final List<dynamic> list = rawData is Map && rawData.containsKey('Table')
+        ? (rawData['Table'] as List<dynamic>? ?? [])
+        : (rawData is List ? rawData : []);
+
+    final events = <BonusEvent>[];
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final purpose = (item['purpose_name'] ?? item['Purpose'] ?? '').toString();
+      final ratio = parseBonusRatio(purpose);
+      if (ratio == null) continue;
+
+      final dateStr = (item['BCRD_from'] ?? item['RD_DATE'] ?? item['RecordDate'])?.toString();
+      final recordDate = parseMarketDate(dateStr);
+      if (recordDate == null) continue;
+
+      events.add(BonusEvent(
+        recordDate: recordDate,
+        bonusShares: ratio.bonus,
+        existingShares: ratio.existing,
+        purpose: purpose,
+        source: 'BSE',
+      ));
+    }
+    return events;
+  }
+
+  static Future<List<BonusEvent>> _fetchYahooBonus(
+    String ticker, {
+    String exchange = 'NSE',
+  }) async {
+    final suffix = exchange.toUpperCase() == 'BSE' ? '.BO' : '.NS';
+    final symbol = '$ticker$suffix';
+    final uri = Uri.parse(
+        'https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=1mo&range=10y&events=split');
+
+    final client = httpClient ?? http.Client();
+    final resp = await client.get(
+      uri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+      },
+    ).timeout(timeoutDuration);
+
+    if (resp.statusCode != 200) return [];
+    final jsonMap = jsonDecode(resp.body) as Map<String, dynamic>;
+    final chart = jsonMap['chart'] as Map<String, dynamic>?;
+    final results = chart?['result'] as List<dynamic>?;
+    if (results == null || results.isEmpty) return [];
+
+    final eventsMap = results.first['events'] as Map<String, dynamic>?;
+    final splitsMap = eventsMap?['splits'] as Map<String, dynamic>?;
+    if (splitsMap == null || splitsMap.isEmpty) return [];
+
+    final list = <BonusEvent>[];
+    for (final entry in splitsMap.values) {
+      if (entry is Map<String, dynamic>) {
+        final timestamp = entry['date'] as num?;
+        final numVal = (entry['numerator'] as num?)?.toInt() ?? 0;
+        final denVal = (entry['denominator'] as num?)?.toInt() ?? 0;
+        final splitRatio = (entry['splitRatio'] as String?) ?? '';
+
+        if (timestamp != null && numVal > denVal && denVal > 0) {
+          final date = DateTime.fromMillisecondsSinceEpoch(timestamp.toInt() * 1000);
+          final bonus = numVal - denVal;
+          list.add(BonusEvent(
+            recordDate: DateTime(date.year, date.month, date.day),
+            bonusShares: bonus,
+            existingShares: denVal,
+            purpose: 'Bonus Issue $bonus:$denVal ($splitRatio)',
+            source: 'YAHOO',
+          ));
+        }
+      }
+    }
+    return list;
   }
 }

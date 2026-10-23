@@ -1,6 +1,7 @@
-// lib/stocks/widgets/tag_chip.dart
+// lib/widgets/tag_chip.dart
 //
-// Reusable tag chip widget used in card list view and detail view.
+// Shared reusable tag chip widget used across Stock and Mutual Fund cards.
+// Displays tag name with compact padding, styling, and optional delete action.
 
 import 'package:flutter/material.dart';
 
@@ -8,7 +9,11 @@ class TagChip extends StatelessWidget {
   final String label;
   final VoidCallback? onDeleted;
 
-  const TagChip({super.key, required this.label, this.onDeleted});
+  const TagChip({
+    super.key,
+    required this.label,
+    this.onDeleted,
+  });
 
   @override
   Widget build(BuildContext context) {

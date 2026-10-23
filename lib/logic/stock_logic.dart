@@ -65,12 +65,14 @@ int compareTransactions(TxRecord a, TxRecord b) {
       switch (type.toUpperCase()) {
         case 'BUY':
           return 0;
-        case 'SELL':
+        case 'BONUS':
           return 1;
-        case 'DIVIDEND':
+        case 'SELL':
           return 2;
-        default:
+        case 'DIVIDEND':
           return 3;
+        default:
+          return 4;
       }
     }
     return rank(a.type).compareTo(rank(b.type));
@@ -86,8 +88,9 @@ int compareTransactions(TxRecord a, TxRecord b) {
 /// Sort order: uses [compareTransactions] (date ASC, BUY before SELL on same date, id ASC).
 ///
 /// Algorithm:
-///   BUY  → add to pool: new_avg = (pool_cost + buy_cost) / (pool_qty + buy_qty)
-///   SELL → reduce quantity proportionally; cost basis per share is unchanged
+///   BUY   → add to pool: new_avg = (pool_cost + buy_cost) / (pool_qty + buy_qty)
+///   BONUS → adds quantity with 0 cost: new_avg = pool_cost / (pool_qty + bonus_qty)
+///   SELL  → reduce quantity proportionally; cost basis per share is unchanged
 HoldingState computeHoldingState(List<TxRecord> transactions) {
   final buySellTx = transactions.where((t) => t.type.toUpperCase() != 'DIVIDEND');
   final sorted = List.of(buySellTx)..sort(compareTransactions);
@@ -95,9 +98,13 @@ HoldingState computeHoldingState(List<TxRecord> transactions) {
   double totalCost = 0;
 
   for (final tx in sorted) {
-    if (tx.type == 'BUY') {
+    final type = tx.type.toUpperCase();
+    if (type == 'BUY') {
       totalCost += tx.totalAmount;
       qty += tx.quantity;
+    } else if (type == 'BONUS') {
+      qty += tx.quantity;
+      // Bonus shares cost 0, totalCost is unchanged
     } else {
       // SELL: reduce quantity; cost basis per remaining share is unchanged
       qty -= tx.quantity;
@@ -215,7 +222,8 @@ ValidationResult validateQuantityNeverNegative(
   // Replay
   int runningQty = 0;
   for (final tx in proposed) {
-    if (tx.type == 'BUY') {
+    final type = tx.type.toUpperCase();
+    if (type == 'BUY' || type == 'BONUS') {
       runningQty += tx.quantity;
     } else {
       runningQty -= tx.quantity;

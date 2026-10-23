@@ -6,7 +6,6 @@ import 'database/app_database.dart';
 import 'providers/database_provider.dart';
 import 'screens/analysis_screen.dart';
 import 'screens/investments_screen.dart';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ensureTickersLoaded();

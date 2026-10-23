@@ -4,17 +4,20 @@
 // Shows: stock info header, tags (editable), properties grid,
 // + Add Transaction button, and scrollable transaction history.
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../data/local_tickers.dart';
 import '../database/app_database.dart';
 import '../logic/stock_logic.dart';
 import '../providers/database_provider.dart';
 import '../services/dividend_source.dart';
 import '../services/price_service.dart';
+import '../utils/app_constants.dart';
+import '../widgets/tag_chip.dart';
 import 'add_transaction_sheet.dart';
 import 'widgets/delete_stock_card_dialog.dart';
-import 'widgets/tag_chip.dart';
 
 class StockCardDetail extends StatefulWidget {
   final StockCard card;
@@ -47,9 +50,12 @@ class StockCardDetailState extends State<StockCardDetail> {
 
   /// Automatically fetch and record any eligible dividends in the background.
   Future<void> checkDividends(StockCard currentCard, {bool force = false}) {
-    if (force || _dividendCheckFuture == null) {
+    if (force) {
       _hasStartedDividendCheck = true;
       _dividendCheckFuture = _doCheckDividends(currentCard);
+    } else {
+      _dividendCheckFuture ??= _doCheckDividends(currentCard);
+      _hasStartedDividendCheck = true;
     }
     return _dividendCheckFuture!;
   }
@@ -58,29 +64,36 @@ class StockCardDetailState extends State<StockCardDetail> {
     final dao = AppDbProvider.of(context).stocksDao;
     try {
       final allDbTxs = await dao.getTransactionsForCard(currentCard.id);
-      if (allDbTxs.isEmpty) return;
+      
+      // Separate user manual transactions (holding transactions) and existing AUTO corporate actions
+      final manualHoldingTxs = allDbTxs
+          .where((t) => t.type.toUpperCase() != 'DIVIDEND' && t.entryMode.toUpperCase() != 'AUTO')
+          .toList();
 
-      // Card's earliest buy/sell transaction date
-      final buySellTxs = allDbTxs.where((t) => t.type.toUpperCase() != 'DIVIDEND').toList();
-      if (buySellTxs.isEmpty) return;
+      // If user has NO manual buy/holding transactions (e.g. they deleted their transactions),
+      // all auto-generated dividends and bonuses must be completely purged immediately.
+      if (manualHoldingTxs.isEmpty) {
+        await dao.deleteAutoTransactionsForCard(currentCard.id);
+        return;
+      }
 
-      final earliestDate = buySellTxs
+      final earliestDate = manualHoldingTxs
           .map((t) => t.date)
           .reduce((a, b) => a.isBefore(b) ? a : b);
+      final DateTime earliestDay = DateTime(earliestDate.year, earliestDate.month, earliestDate.day);
 
       final events = await DividendSource.fetchDividends(
         currentCard.ticker,
         exchange: currentCard.exchange,
       );
 
-      final DateTime? lastChecked = currentCard.dividendsFetchedUpto;
-      final DateTime earliestDay = DateTime(earliestDate.year, earliestDate.month, earliestDate.day);
-      final DateTime checkUptoDay = lastChecked != null
-          ? DateTime(lastChecked.year, lastChecked.month, lastChecked.day)
-          : earliestDay;
+      final bonusEvents = await DividendSource.fetchBonusIssues(
+        currentCard.ticker,
+        exchange: currentCard.exchange,
+      );
 
-      // Convert buy/sell transactions to TxRecord list
-      final txRecords = buySellTxs
+      // Start with user-entered transactions sorted chronologically
+      final txRecords = manualHoldingTxs
           .map((t) => TxRecord(
                 id: t.id,
                 type: t.type,
@@ -92,43 +105,153 @@ class StockCardDetailState extends State<StockCardDetail> {
           .toList()
         ..sort(compareTransactions);
 
+      // Merge and sort all corporate action event dates ASC
+      final allEventDates = <DateTime>{};
       for (final ev in events) {
-        final evDate = DateTime(ev.recordDate.year, ev.recordDate.month, ev.recordDate.day);
-        // Only inspect dividends on or after checkUptoDay AND on/after earliestDay
-        if (evDate.isBefore(checkUptoDay) || evDate.isBefore(earliestDay)) {
+        allEventDates.add(DateTime(ev.recordDate.year, ev.recordDate.month, ev.recordDate.day));
+      }
+      for (final b in bonusEvents) {
+        allEventDates.add(DateTime(b.recordDate.year, b.recordDate.month, b.recordDate.day));
+      }
+      final sortedDates = allEventDates.toList()..sort();
+
+      // Track IDs of all auto transactions that remain valid during this full recalculation
+      final validAutoTxIds = <int>{};
+
+      for (final curDate in sortedDates) {
+        // If event occurred before the earliest manual holding date, any existing auto record is invalid
+        if (curDate.isBefore(earliestDay)) {
           continue;
         }
 
-        // Check if already inserted in DB
-        final alreadyInserted = await dao.hasDividendTransaction(
-          cardId: currentCard.id,
-          date: ev.recordDate,
-          price: ev.amountPerShare,
-        );
-        if (alreadyInserted) {
-          continue;
-        }
-
-        // Compute holding as of this record date (inclusive)
-        final txsUpToDate = txRecords.where((t) {
-          final tDate = DateTime(t.date.year, t.date.month, t.date.day);
-          return !tDate.isAfter(evDate);
+        // 1. Process any Bonus Issues on curDate first
+        final bonusesOnDate = bonusEvents.where((b) {
+          final bDate = DateTime(b.recordDate.year, b.recordDate.month, b.recordDate.day);
+          return bDate.isAtSameMomentAs(curDate);
         }).toList();
 
-        final holdingAsOf = computeHoldingState(txsUpToDate);
-        if (holdingAsOf.quantityHeld > 0) {
-          final payout = double.parse((holdingAsOf.quantityHeld * ev.amountPerShare).toStringAsFixed(2));
-          await dao.insertTransaction(
-            StockTransactionsCompanion.insert(
-              cardId: currentCard.id,
-              type: 'DIVIDEND',
-              entryMode: 'AUTO',
-              date: ev.recordDate,
-              price: ev.amountPerShare,
-              quantity: holdingAsOf.quantityHeld,
-              totalAmount: payout,
-            ),
+        for (final bonus in bonusesOnDate) {
+          final txsUpToDate = txRecords.where((t) {
+            final tDate = DateTime(t.date.year, t.date.month, t.date.day);
+            return !tDate.isAfter(curDate);
+          }).toList();
+
+          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final existingBonus = await dao.findBonusTransaction(
+            cardId: currentCard.id,
+            date: bonus.recordDate,
           );
+
+          if (holdingAsOf.quantityHeld > 0 && bonus.existingShares > 0) {
+            final newBonusQty = (holdingAsOf.quantityHeld * bonus.bonusShares) ~/ bonus.existingShares;
+            if (newBonusQty > 0) {
+              int bonusTxId;
+              if (existingBonus != null) {
+                bonusTxId = existingBonus.id;
+                if (existingBonus.quantity != newBonusQty) {
+                  await dao.updateTransaction(
+                    StockTransactionsCompanion(
+                      id: Value(existingBonus.id),
+                      cardId: Value(currentCard.id),
+                      type: const Value('BONUS'),
+                      entryMode: const Value('AUTO'),
+                      date: Value(bonus.recordDate),
+                      price: const Value(0.0),
+                      quantity: Value(newBonusQty),
+                      totalAmount: const Value(0.0),
+                    ),
+                  );
+                }
+              } else {
+                bonusTxId = await dao.insertTransaction(
+                  StockTransactionsCompanion.insert(
+                    cardId: currentCard.id,
+                    type: 'BONUS',
+                    entryMode: 'AUTO',
+                    date: bonus.recordDate,
+                    price: 0.0,
+                    quantity: newBonusQty,
+                    totalAmount: 0.0,
+                  ),
+                );
+              }
+              validAutoTxIds.add(bonusTxId);
+              txRecords.add(TxRecord(
+                id: bonusTxId,
+                type: 'BONUS',
+                date: bonus.recordDate,
+                price: 0.0,
+                quantity: newBonusQty,
+                totalAmount: 0.0,
+              ));
+              txRecords.sort(compareTransactions);
+            }
+          }
+        }
+
+        // 2. Process Dividends on curDate
+        final dividendsOnDate = events.where((ev) {
+          final evDate = DateTime(ev.recordDate.year, ev.recordDate.month, ev.recordDate.day);
+          return evDate.isAtSameMomentAs(curDate);
+        }).toList();
+
+        for (final ev in dividendsOnDate) {
+          final txsUpToDate = txRecords.where((t) {
+            final tDate = DateTime(t.date.year, t.date.month, t.date.day);
+            return !tDate.isAfter(curDate);
+          }).toList();
+
+          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final existingDiv = await dao.findDividendTransaction(
+            cardId: currentCard.id,
+            date: ev.recordDate,
+            price: ev.amountPerShare,
+          );
+
+          if (holdingAsOf.quantityHeld > 0) {
+            final newPayout = double.parse((holdingAsOf.quantityHeld * ev.amountPerShare).toStringAsFixed(2));
+            int divTxId;
+            if (existingDiv != null) {
+              divTxId = existingDiv.id;
+              if (existingDiv.quantity != holdingAsOf.quantityHeld ||
+                  (existingDiv.totalAmount - newPayout).abs() > 0.001) {
+                await dao.updateTransaction(
+                  StockTransactionsCompanion(
+                    id: Value(existingDiv.id),
+                    cardId: Value(currentCard.id),
+                    type: const Value('DIVIDEND'),
+                    entryMode: const Value('AUTO'),
+                    date: Value(ev.recordDate),
+                    price: Value(ev.amountPerShare),
+                    quantity: Value(holdingAsOf.quantityHeld),
+                    totalAmount: Value(newPayout),
+                  ),
+                );
+              }
+            } else {
+              divTxId = await dao.insertTransaction(
+                StockTransactionsCompanion.insert(
+                  cardId: currentCard.id,
+                  type: 'DIVIDEND',
+                  entryMode: 'AUTO',
+                  date: ev.recordDate,
+                  price: ev.amountPerShare,
+                  quantity: holdingAsOf.quantityHeld,
+                  totalAmount: newPayout,
+                ),
+              );
+            }
+            validAutoTxIds.add(divTxId);
+          }
+        }
+      }
+
+      // Purge any AUTO transactions currently in the database that are no longer valid
+      // (e.g., from deleted transactions, shifted earliest dates, zero holding, etc.)
+      final existingAutoTxs = allDbTxs.where((t) => t.entryMode.toUpperCase() == 'AUTO').toList();
+      for (final autoTx in existingAutoTxs) {
+        if (!validAutoTxIds.contains(autoTx.id)) {
+          await dao.deleteTransaction(autoTx.id);
         }
       }
 
@@ -174,7 +297,7 @@ class StockCardDetailState extends State<StockCardDetail> {
 
   Future<void> _openAddTransaction() async {
     final db = AppDbProvider.of(context);
-    await showModalBottomSheet(
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -189,6 +312,9 @@ class StockCardDetailState extends State<StockCardDetail> {
         ),
       ),
     );
+    if (result == true && mounted) {
+      await checkDividends(card, force: true);
+    }
   }
 
   Future<void> _tryDeleteTransaction(
@@ -252,12 +378,15 @@ class StockCardDetailState extends State<StockCardDetail> {
 
     if (confirmed == true) {
       await dao.deleteTransaction(tx.id);
+      if (mounted) {
+        await checkDividends(card, force: true);
+      }
     }
   }
 
   Future<void> _editTransaction(StockTransaction tx) async {
     final db = AppDbProvider.of(context);
-    await showModalBottomSheet(
+    final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -273,6 +402,9 @@ class StockCardDetailState extends State<StockCardDetail> {
         ),
       ),
     );
+    if (result == true && mounted) {
+      await checkDividends(card, force: true);
+    }
   }
 
   Future<void> _showAddTagDialog(BuildContext context, List<Tag> currentTags) async {
@@ -299,9 +431,9 @@ class StockCardDetailState extends State<StockCardDetail> {
               setDialogState(() => inlineError = 'Tag name cannot be empty');
               return;
             }
-            if (trimmed.length > 30) {
+            if (trimmed.length > kMaxTagLength) {
               setDialogState(
-                  () => inlineError = 'Tag name cannot exceed 30 characters');
+                  () => inlineError = 'Tag name cannot exceed $kMaxTagLength characters');
               return;
             }
             if (currentTags.any(
@@ -328,7 +460,7 @@ class StockCardDetailState extends State<StockCardDetail> {
                 children: [
                   TextField(
                     controller: controller,
-                    maxLength: 30,
+                    maxLength: kMaxTagLength,
                     decoration: InputDecoration(
                       labelText: 'New tag name',
                       border: OutlineInputBorder(
@@ -495,6 +627,26 @@ class StockCardDetailState extends State<StockCardDetail> {
                           _ExchangeBadge(exchange: liveCard.exchange),
                         ],
                       ),
+                      const SizedBox(height: 4),
+                      Builder(builder: (context) {
+                        final info = getTickerInfoBySymbolSync(liveCard.ticker, exchange: liveCard.exchange);
+                        final parts = <String>['Ticker: ${liveCard.ticker}'];
+                        if (info?.scripCode != null && info!.scripCode!.isNotEmpty) {
+                          parts.add('Code: ${info.scripCode}');
+                        }
+                        final isin = info?.isin ?? getIsinForSymbolSync(liveCard.ticker, exchange: liveCard.exchange);
+                        if (isin != null && isin.isNotEmpty) {
+                          parts.add('ISIN: $isin');
+                        }
+                        return Text(
+                          parts.join(' · '),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: cs.onSurface.withValues(alpha: 0.6),
+                          ),
+                        );
+                      }),
                       const SizedBox(height: 10),
 
                       // ── Tags Section ─────────────────────────────────────────
@@ -817,6 +969,75 @@ class _TransactionRow extends StatelessWidget {
             fontSize: 14,
             fontWeight: FontWeight.w700,
             color: Color(0xFF1B8A4C),
+          ),
+        ),
+      );
+    }
+
+    final isBonus = tx.type.toUpperCase() == 'BONUS';
+    if (isBonus) {
+      return Dismissible(
+        key: Key('tx_${tx.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          color: cs.errorContainer,
+          child: Icon(Icons.delete_outline, color: cs.onErrorContainer),
+        ),
+        confirmDismiss: (_) async {
+          onDelete();
+          return false;
+        },
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.purple.withValues(alpha: 0.15),
+            child: const Icon(
+              Icons.card_giftcard,
+              color: Colors.purple,
+              size: 18,
+            ),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'BONUS ISSUE',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    color: Colors.purple,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                dateFmt.format(tx.date),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: cs.onSurface.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          subtitle: Text(
+            '+${tx.quantity} bonus shares credited · ₹0 cost basis',
+            style: TextStyle(
+              fontSize: 13,
+              color: cs.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+          trailing: IconButton(
+            icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
+            tooltip: 'Remove bonus entry',
+            onPressed: onDelete,
           ),
         ),
       );

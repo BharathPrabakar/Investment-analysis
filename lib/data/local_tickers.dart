@@ -51,9 +51,79 @@ class TickerInfo {
         if (scripCode != null) 'scrip_code': scripCode,
       };
 
-  @override
-  String toString() =>
-      'TickerInfo(symbol: $symbol, companyName: $companyName, exchange: $exchange, isin: $isin, scripCode: $scripCode)';
+  /// Identifies whether this instrument is a non-stock security:
+  /// Mutual Funds, ETFs, NCDs/Bonds/Debt instruments, REITs, InvITs, SGBs, etc.
+  bool get isNonStockSecurity {
+    final upperIsin = isin.toUpperCase();
+    // In India:
+    // - INF... = Mutual Funds & ETFs
+    // - IN0... = Government securities / Sovereign Gold Bonds
+    // - INE... = Equities and corporate bonds
+    if (upperIsin.startsWith('INF') || upperIsin.startsWith('IN0')) return true;
+
+    // BSE debt/NCD series: scrip codes starting with 9 (e.g. 93xxxx, 9xxxxx)
+    if (scripCode != null && scripCode!.isNotEmpty) {
+      final scripTrim = scripCode!.trim();
+      if (scripTrim.startsWith('9')) return true;
+    }
+
+    final upperName = companyName.toUpperCase();
+    final upperSym = symbol.toUpperCase();
+
+    // Check REITs and InvITs
+    if (upperName.contains('REIT') ||
+        upperSym.contains('REIT') ||
+        upperName.contains('INVIT') ||
+        upperSym.contains('INVIT') ||
+        upperName.contains('INFRASTRUCTURE INVESTMENT TRUST') ||
+        upperName.contains('REAL ESTATE INVESTMENT TRUST')) {
+      return true;
+    }
+
+    // Check NCDs, Bonds, Debentures, Debt instruments
+    if (upperName.contains('NCD') ||
+        upperSym.contains('NCD') ||
+        upperName.contains('TAXFREE') ||
+        upperSym.contains('TAXFREE') ||
+        upperName.contains('DEBENTURE') ||
+        upperName.contains('-BOND') ||
+        upperName.endsWith(' BOND') ||
+        upperName.endsWith(' BONDS') ||
+        upperName.contains('SECURED REDEEMABLE') ||
+        upperName.contains('UNSECURED REDEEMABLE') ||
+        upperSym.endsWith('NCD') ||
+        upperSym.endsWith('BOND') ||
+        // Check coupon rate pattern like 7.50% or 8.05%
+        RegExp(r'\d+\.?\d*%\s*-').hasMatch(upperName)) {
+      return true;
+    }
+
+    // Check common mutual fund & ETF identifiers in company name or ticker symbol
+    if (upperName.contains('MUTUAL FUND') ||
+        upperName.contains(' ETF') ||
+        upperName.startsWith('ETF ') ||
+        upperName.endsWith(' ETF') ||
+        upperSym.endsWith('BEES') ||
+        upperSym.endsWith('IETF') ||
+        upperSym.endsWith('ETF') ||
+        upperName.contains('BEES') ||
+        upperName.contains('SGB') ||
+        upperName.contains('SOVEREIGN GOLD BOND') ||
+        upperName.contains('GROWW MUTUAL') ||
+        upperName.contains('KOTAK MAHINDRA MUTUAL') ||
+        upperName.contains('NIPPON INDIA ETF') ||
+        upperName.contains('HDFC MUTUAL FUND') ||
+        upperName.contains('SBI MUTUAL FUND') ||
+        upperName.contains('AXIS MUTUAL FUND') ||
+        upperName.contains('UTI MUTUAL FUND') ||
+        upperName.contains('ICICI PRUDENTIAL MUTUAL')) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Backward-compatible alias for [isNonStockSecurity].
+  bool get isMutualFundOrEtf => isNonStockSecurity;
 }
 
 /// Internal searchable item wrapper to avoid repeated string allocations per search.
@@ -74,6 +144,14 @@ Map<String, TickerInfo>? _symbolToTickerMap;
 Map<String, TickerInfo>? _isinToTickerMap;
 Future<void>? _loadingFuture;
 
+/// Clears cached tickers so the dataset can be re-indexed.
+void clearTickerCache() {
+  _cachedSearchables = null;
+  _symbolToTickerMap = null;
+  _isinToTickerMap = null;
+  _loadingFuture = null;
+}
+
 /// Initializes the local ticker index asynchronously from the bundled assets.
 /// Loads both NSE and BSE datasets into a unified search index.
 Future<void> ensureTickersLoaded([AssetBundle? bundle]) {
@@ -87,7 +165,10 @@ Future<void> ensureTickersLoaded([AssetBundle? bundle]) {
     final isinMap = <String, TickerInfo>{};
 
     void processTicker(TickerInfo ticker) {
-      searchables.add(_SearchableTicker(ticker));
+      // Exclude Mutual Funds and ETFs from the Stocks search index
+      if (!ticker.isMutualFundOrEtf) {
+        searchables.add(_SearchableTicker(ticker));
+      }
       final ex = ticker.exchange.toUpperCase();
 
       // Key by symbol: $EX:$SYMBOL and naked $SYMBOL
@@ -179,6 +260,17 @@ String? getIsinForSymbolSync(String symbol, {String? exchange}) {
   return _symbolToTickerMap?[upper]?.isin;
 }
 
+/// Synchronously lookup TickerInfo for a symbol if already loaded.
+TickerInfo? getTickerInfoBySymbolSync(String symbol, {String? exchange}) {
+  final upper = symbol.trim().toUpperCase();
+  if (exchange != null) {
+    final exKey = '${exchange.trim().toUpperCase()}:$upper';
+    final found = _symbolToTickerMap?[exKey];
+    if (found != null) return found;
+  }
+  return _symbolToTickerMap?[upper];
+}
+
 /// Lookup ISIN for a symbol, ensuring the dataset is loaded.
 Future<String?> getIsinForSymbol(String symbol, {String? exchange}) async {
   await ensureTickersLoaded();
@@ -242,6 +334,9 @@ List<TickerInfo> searchTickers(String query, {int limit = 30, String? exchange})
 
   for (var i = 0; i < searchables.length; i++) {
     final item = searchables[i];
+    if (item.ticker.isMutualFundOrEtf) {
+      continue;
+    }
     if (targetEx != null && item.ticker.exchange.toUpperCase() != targetEx) {
       continue;
     }
@@ -249,18 +344,27 @@ List<TickerInfo> searchTickers(String query, {int limit = 30, String? exchange})
     final sym = item.upperSymbol;
     final scrip = item.upperScripCode;
     final name = item.upperCompanyName;
+    final isin = item.ticker.isin.toUpperCase();
 
+    // 1. Symbol or Scrip Code prefix match
     if (sym.startsWith(qUpper) || (scrip.isNotEmpty && scrip.startsWith(qUpper))) {
       prefixMatches.add(item.ticker);
       continue;
     }
 
+    // 2. ISIN match (exact, prefix, or contains)
+    if (isin.isNotEmpty && (isin.startsWith(qUpper) || isin.contains(qUpper))) {
+      prefixMatches.add(item.ticker);
+      continue;
+    }
+
+    // 3. Symbol or Scrip Code substring match
     if (sym.contains(qUpper) || (scrip.isNotEmpty && scrip.contains(qUpper))) {
       containsMatches.add(item.ticker);
       continue;
     }
 
-    // Company name word match: all query words must appear in company name
+    // 4. Company name word match: all query words must appear in company name
     var matchesAllWords = true;
     for (var w = 0; w < words.length; w++) {
       if (!name.contains(words[w])) {

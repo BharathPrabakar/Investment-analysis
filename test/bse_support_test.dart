@@ -48,6 +48,29 @@ void main() {
     expect(scripResults, isNotEmpty);
     expect(scripResults.any((t) => t.exchange == 'BSE' && t.scripCode == '500325'), isTrue);
 
+    // Verify that ETFs, BEES, and Mutual Funds are NOT in search results
+    final beesResults = searchTickers('BEES', exchange: 'BSE');
+    expect(beesResults, isEmpty);
+
+    final mfResults = searchTickers('MUTUAL FUND', exchange: 'BSE');
+    expect(mfResults, isEmpty);
+
+    final goldBees = searchTickers('GOLDBEES', exchange: 'BSE');
+    expect(goldBees, isEmpty);
+
+    // Verify NCDs, Bonds, REITs, and InvITs are excluded
+    final ncdResults = searchTickers('NCD');
+    expect(ncdResults, isEmpty);
+
+    final reitResults = searchTickers('REIT');
+    expect(reitResults, isEmpty);
+
+    final invitResults = searchTickers('INVIT');
+    expect(invitResults, isEmpty);
+
+    final pfcBond = searchTickers('752PFCL30');
+    expect(pfcBond, isEmpty);
+
     // Search by symbol across all exchanges returns both NSE and BSE
     final bseResults = searchTickers('RELIANCE');
     expect(bseResults.any((t) => t.exchange == 'BSE'), isTrue);

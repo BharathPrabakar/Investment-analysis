@@ -5,6 +5,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../utils/app_constants.dart';
 import 'price_service.dart';
 
 class YahooQuote {
@@ -103,7 +104,7 @@ class YahooQuoteSource {
     final nowIst = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
 
     // Rule 1: IST time before 9:15 AM
-    final marketOpenIst = DateTime.utc(nowIst.year, nowIst.month, nowIst.day, 9, 15);
+    final marketOpenIst = DateTime.utc(nowIst.year, nowIst.month, nowIst.day, kMarketOpenHourIst, kMarketOpenMinuteIst);
     if (nowIst.isBefore(marketOpenIst)) {
       throw const MarketNotOpenException();
     }
