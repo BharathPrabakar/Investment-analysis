@@ -238,6 +238,34 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
         .getSingleOrNull();
   }
 
+  /// Checks if a stock split transaction already exists for this card and date.
+  Future<bool> hasSplitTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final existing = await findSplitTransaction(
+      cardId: cardId,
+      date: date,
+    );
+    return existing != null;
+  }
+
+  /// Finds an existing stock split transaction for this card and date.
+  Future<StockTransaction?> findSplitTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final dateStart = DateTime(date.year, date.month, date.day);
+    final dateEnd = dateStart.add(const Duration(days: 1));
+    return (select(stockTransactions)
+          ..where((t) =>
+              t.cardId.equals(cardId) &
+              t.type.equals('SPLIT') &
+              t.date.isBiggerOrEqualValue(dateStart) &
+              t.date.isSmallerThanValue(dateEnd)))
+        .getSingleOrNull();
+  }
+
   /// Merge into an existing transaction (duplicate merge).
   Future<void> mergeIntoExistingTransaction({
     required int txId,

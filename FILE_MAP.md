@@ -189,3 +189,18 @@
   - **Purpose:** Reusable UI chip widget for rendering portfolio category tags (e.g. "Long Term", "High Growth", "Dividend") with consistent styling and deletion callbacks.
   - **Key Symbols:** `TagChip`
   - **Dependents / Links:** [stocks_section.dart](file:///c:/my_new_app/lib/stocks/stocks_section.dart), [stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart)
+
+---
+
+## 10. Test Suites (`test/`)
+
+* [test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart)
+  - **Purpose:** Comprehensive test suite for Stock Splits: announcement regex parsing (`parseSplitRatio`), weighted-average-cost conservation math, chronologically sequenced replaying, validation against negative balances, and `StocksDao` transaction queries.
+  - **Dependents / Links:** [dividend_source.dart](file:///c:/my_new_app/lib/services/dividend_source.dart), [stock_logic.dart](file:///c:/my_new_app/lib/logic/stock_logic.dart), [stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart)
+
+* [test/delete_stock_card_test.dart](file:///c:/my_new_app/test/delete_stock_card_test.dart)
+  - **Purpose:** Cascading deletion validation tests ensuring transactions, tags, and cards are purged cleanly.
+
+* [test/duplicate_stock_card_test.dart](file:///c:/my_new_app/test/duplicate_stock_card_test.dart)
+  - **Purpose:** Tests preventing duplicate stock card creation and validating unique constraints.
+

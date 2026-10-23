@@ -92,6 +92,11 @@ class StockCardDetailState extends State<StockCardDetail> {
         exchange: currentCard.exchange,
       );
 
+      final splitEvents = await DividendSource.fetchStockSplits(
+        currentCard.ticker,
+        exchange: currentCard.exchange,
+      );
+
       // Start with user-entered transactions sorted chronologically
       final txRecords = manualHoldingTxs
           .map((t) => TxRecord(
@@ -103,7 +108,7 @@ class StockCardDetailState extends State<StockCardDetail> {
                 totalAmount: t.totalAmount,
               ))
           .toList()
-        ..sort(compareTransactions);
+          ..sort(compareTransactions);
 
       // Merge and sort all corporate action event dates ASC
       final allEventDates = <DateTime>{};
@@ -112,6 +117,9 @@ class StockCardDetailState extends State<StockCardDetail> {
       }
       for (final b in bonusEvents) {
         allEventDates.add(DateTime(b.recordDate.year, b.recordDate.month, b.recordDate.day));
+      }
+      for (final s in splitEvents) {
+        allEventDates.add(DateTime(s.recordDate.year, s.recordDate.month, s.recordDate.day));
       }
       final sortedDates = allEventDates.toList()..sort();
 
@@ -124,7 +132,75 @@ class StockCardDetailState extends State<StockCardDetail> {
           continue;
         }
 
-        // 1. Process any Bonus Issues on curDate first
+        // 1. Process any Stock Splits on curDate first (splits adjust base share count)
+        final splitsOnDate = splitEvents.where((s) {
+          final sDate = DateTime(s.recordDate.year, s.recordDate.month, s.recordDate.day);
+          return sDate.isAtSameMomentAs(curDate);
+        }).toList();
+
+        for (final split in splitsOnDate) {
+          final txsUpToDate = txRecords.where((t) {
+            final tDate = DateTime(t.date.year, t.date.month, t.date.day);
+            return !tDate.isAfter(curDate);
+          }).toList();
+
+          final holdingAsOf = computeHoldingState(txsUpToDate);
+          final existingSplit = await dao.findSplitTransaction(
+            cardId: currentCard.id,
+            date: split.recordDate,
+          );
+
+          if (holdingAsOf.quantityHeld > 0 && split.newFaceValue > 0 && split.oldFaceValue > split.newFaceValue) {
+            // Net added shares: (heldQty * multiplier) - heldQty
+            // Multiplier = oldFaceValue / newFaceValue
+            // e.g. 10 shares split 10:2 (multiplier 5) -> new total is 50, added is 40.
+            final addedQty = ((holdingAsOf.quantityHeld * split.oldFaceValue) / split.newFaceValue).round() - holdingAsOf.quantityHeld;
+            if (addedQty > 0) {
+              int splitTxId;
+              if (existingSplit != null) {
+                splitTxId = existingSplit.id;
+                if (existingSplit.quantity != addedQty) {
+                  await dao.updateTransaction(
+                    StockTransactionsCompanion(
+                      id: Value(existingSplit.id),
+                      cardId: Value(currentCard.id),
+                      type: const Value('SPLIT'),
+                      entryMode: const Value('AUTO'),
+                      date: Value(split.recordDate),
+                      price: const Value(0.0),
+                      quantity: Value(addedQty),
+                      totalAmount: const Value(0.0),
+                    ),
+                  );
+                }
+              } else {
+                splitTxId = await dao.insertTransaction(
+                  StockTransactionsCompanion.insert(
+                    cardId: currentCard.id,
+                    type: 'SPLIT',
+                    entryMode: 'AUTO',
+                    date: split.recordDate,
+                    price: 0.0,
+                    quantity: addedQty,
+                    totalAmount: 0.0,
+                  ),
+                );
+              }
+              validAutoTxIds.add(splitTxId);
+              txRecords.add(TxRecord(
+                id: splitTxId,
+                type: 'SPLIT',
+                date: split.recordDate,
+                price: 0.0,
+                quantity: addedQty,
+                totalAmount: 0.0,
+              ));
+              txRecords.sort(compareTransactions);
+            }
+          }
+        }
+
+        // 2. Process any Bonus Issues on curDate
         final bonusesOnDate = bonusEvents.where((b) {
           final bDate = DateTime(b.recordDate.year, b.recordDate.month, b.recordDate.day);
           return bDate.isAtSameMomentAs(curDate);
@@ -189,7 +265,7 @@ class StockCardDetailState extends State<StockCardDetail> {
           }
         }
 
-        // 2. Process Dividends on curDate
+        // 3. Process Dividends on curDate
         final dividendsOnDate = events.where((ev) {
           final evDate = DateTime(ev.recordDate.year, ev.recordDate.month, ev.recordDate.day);
           return evDate.isAtSameMomentAs(curDate);
@@ -1037,6 +1113,75 @@ class _TransactionRow extends StatelessWidget {
           trailing: IconButton(
             icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
             tooltip: 'Remove bonus entry',
+            onPressed: onDelete,
+          ),
+        ),
+      );
+    }
+
+    final isSplit = tx.type.toUpperCase() == 'SPLIT';
+    if (isSplit) {
+      return Dismissible(
+        key: Key('tx_${tx.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          color: cs.errorContainer,
+          child: Icon(Icons.delete_outline, color: cs.onErrorContainer),
+        ),
+        confirmDismiss: (_) async {
+          onDelete();
+          return false;
+        },
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.blue.withValues(alpha: 0.15),
+            child: const Icon(
+              Icons.call_split,
+              color: Colors.blue,
+              size: 18,
+            ),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'STOCK SPLIT',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    color: Colors.blue,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                dateFmt.format(tx.date),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: cs.onSurface.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          subtitle: Text(
+            '+${tx.quantity} split shares credited · Face value sub-division',
+            style: TextStyle(
+              fontSize: 13,
+              color: cs.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+          trailing: IconButton(
+            icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
+            tooltip: 'Remove split entry',
             onPressed: onDelete,
           ),
         ),

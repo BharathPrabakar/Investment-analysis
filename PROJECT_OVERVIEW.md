@@ -179,10 +179,11 @@ All financial calculations reside in [`lib/logic/stock_logic.dart`](lib/logic/st
 * **Realized P&L:** Calculated per sell transaction against the average cost at the execution timestamp.
 * **Unrealized P&L:** `(Current Price - Average Cost) * Holding Quantity`.
 * **Day Gain / Loss:** `(Current Price - Previous Close) * Holding Quantity`.
-* **Corporate Action Reconciliation (Dividends & Bonuses):** Whenever holding transactions (`BUY`, `SELL`, `SPLIT`) are inserted, edited, or deleted, corporate actions are recomputed end-to-end:
-  - If all non-auto holding transactions are deleted, all auto-generated dividends and bonuses for the card are immediately purged from the database.
-  - For modified holdings or shifted dates, any orphaned or previously credited auto-dividends/bonuses on dates where zero shares were held or where the event is no longer eligible are permanently removed.
-  - Active dividends and bonus allocations are updated or inserted in real-time.
+* **Corporate Action Reconciliation (Dividends, Bonuses & Stock Splits):** Whenever holding transactions (`BUY`, `SELL`, `SPLIT`, `BONUS`) are inserted, edited, or deleted, corporate actions are recomputed end-to-end:
+  - **Stock Splits:** Detected from NSE, BSE corporate actions, and Yahoo Finance (`sub-division`, `FV 10 to 1`, `split 1:5`, etc.). Auto-inserts `SPLIT` transactions (`price: 0, totalAmount: 0, entryMode: 'AUTO'`). Quantities are adjusted dynamically: net additional shares equal `((quantityHeld * oldFV) / newFV) - quantityHeld`. Total invested capital is conserved, proportionally lowering the weighted-average purchase cost without falsifying historic buy transactions.
+  - **Bonus Issues:** Re-executed chronologically based on eligible holding count on record date (`(quantityHeld * bonus) ~/ existing`).
+  - **Purge on Ineligibility:** If all non-auto holding transactions are deleted, all auto-generated dividends, bonuses, and splits for the card are immediately purged from the database.
+  - **Orphan Cleanup:** For modified holdings or shifted dates, any orphaned or previously credited auto corporate actions on dates where zero shares were held or where the event is no longer eligible are permanently removed.
 
 ---
 

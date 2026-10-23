@@ -98,6 +98,64 @@ class BonusEvent {
       'BonusEvent(recordDate: ${DateFormat('yyyy-MM-dd').format(recordDate)}, ratio: $bonusShares:$existingShares, purpose: "$purpose", source: $source)';
 }
 
+/// A single stock split event (sub-division of equity shares).
+class SplitEvent {
+  /// Record date or ex-date of the split.
+  final DateTime recordDate;
+
+  /// Old face value / denomination (e.g. 10.0 in a 10 to 2 split).
+  final double oldFaceValue;
+
+  /// New face value / denomination (e.g. 2.0 in a 10 to 2 split).
+  final double newFaceValue;
+
+  /// Raw description or purpose.
+  final String purpose;
+
+  /// Source exchange ("NSE", "BSE", or "YAHOO").
+  final String source;
+
+  const SplitEvent({
+    required this.recordDate,
+    required this.oldFaceValue,
+    required this.newFaceValue,
+    required this.purpose,
+    required this.source,
+  });
+
+  /// Ratio multiplier of new shares received per 1 old share held.
+  /// E.g. FV 10 -> FV 2 is multiplier 5.0 (each 1 share turns into 5 shares).
+  double get multiplier => (newFaceValue > 0) ? (oldFaceValue / newFaceValue) : 1.0;
+
+  /// Number of net new shares added per 1 old share held.
+  /// E.g. FV 10 -> FV 2 adds 4 additional shares.
+  int addedSharesPerExisting() {
+    if (newFaceValue <= 0) return 0;
+    final m = (oldFaceValue / newFaceValue).round();
+    return m > 1 ? m - 1 : 0;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'recordDate': recordDate.toIso8601String(),
+        'oldFaceValue': oldFaceValue,
+        'newFaceValue': newFaceValue,
+        'purpose': purpose,
+        'source': source,
+      };
+
+  factory SplitEvent.fromJson(Map<String, dynamic> json) => SplitEvent(
+        recordDate: DateTime.parse(json['recordDate'] as String),
+        oldFaceValue: (json['oldFaceValue'] as num).toDouble(),
+        newFaceValue: (json['newFaceValue'] as num).toDouble(),
+        purpose: json['purpose'] as String? ?? '',
+        source: json['source'] as String? ?? '',
+      );
+
+  @override
+  String toString() =>
+      'SplitEvent(recordDate: ${DateFormat('yyyy-MM-dd').format(recordDate)}, FV: $oldFaceValue->$newFaceValue (x$multiplier), purpose: "$purpose", source: $source)';
+}
+
 /// Service to fetch and parse dividend and corporate action announcements from NSE, BSE, and Yahoo.
 class DividendSource {
   static const Duration timeoutDuration = Duration(seconds: 15);
@@ -107,6 +165,77 @@ class DividendSource {
 
   /// Optional cache directory override for testing.
   static Directory? cacheDirOverrideForTesting;
+
+  /// Parses stock split face values or ratio from an announcement purpose string.
+  /// Examples:
+  /// - "Sub-Division of Shares from Rs. 10/- to Rs. 2/-" -> (oldFaceValue: 10.0, newFaceValue: 2.0)
+  /// - "Face Value Split From Rs 10 To Rs 1" -> (oldFaceValue: 10.0, newFaceValue: 1.0)
+  /// - "Stock Split from Rs.5/- to Rs.1/- per share" -> (oldFaceValue: 5.0, newFaceValue: 1.0)
+  /// - "Split 1:5" -> (oldFaceValue: 5.0, newFaceValue: 1.0)
+  /// - "Split 1:10" -> (oldFaceValue: 10.0, newFaceValue: 1.0)
+  /// - "Sub-division From Rs 10 To Re 1" -> (oldFaceValue: 10.0, newFaceValue: 1.0)
+  static ({double oldFaceValue, double newFaceValue})? parseSplitRatio(String purpose) {
+    if (purpose.trim().isEmpty) return null;
+
+    final lower = purpose.toLowerCase();
+    // Must contain split or sub-division / subdivision keywords
+    final isSplitAnnouncement = lower.contains('split') ||
+        lower.contains('sub-division') ||
+        lower.contains('sub division') ||
+        lower.contains('subdivision');
+
+    if (!isSplitAnnouncement) return null;
+
+    // Pattern 1: "from Rs. 10/- to Rs. 2/-" or "from 10 to 2" or "from Rs 10 to Re 1"
+    final fromToRegex = RegExp(
+      r'from\s*(?:rs\.?|re\.?)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|re\.?)?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/-)?\s*per\s*share)?',
+      caseSensitive: false,
+    );
+    final ftMatch = fromToRegex.firstMatch(purpose);
+    if (ftMatch != null) {
+      final oldFv = double.tryParse(ftMatch.group(1) ?? '');
+      final newFv = double.tryParse(ftMatch.group(2) ?? '');
+      if (oldFv != null && newFv != null && oldFv > newFv && newFv > 0) {
+        return (oldFaceValue: oldFv, newFaceValue: newFv);
+      }
+    }
+
+    // Pattern 2: "Rs. 10/- to Rs. 2/-" without 'from'
+    final bareToRegex = RegExp(
+      r'(?:rs\.?|re\.?)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|re\.?)?\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:/-)?\s*per\s*share)?',
+      caseSensitive: false,
+    );
+    final btMatch = bareToRegex.firstMatch(purpose);
+    if (btMatch != null) {
+      final oldFv = double.tryParse(btMatch.group(1) ?? '');
+      final newFv = double.tryParse(btMatch.group(2) ?? '');
+      if (oldFv != null && newFv != null && oldFv > newFv && newFv > 0) {
+        return (oldFaceValue: oldFv, newFaceValue: newFv);
+      }
+    }
+
+    // Pattern 3: "split 1:5", "subdivision 1:10", "split 10:1"
+    final ratioRegex = RegExp(
+      r'(?:split|sub-?division).*?\b(\d+)\s*:\s*(\d+)\b',
+      caseSensitive: false,
+    );
+    final rMatch = ratioRegex.firstMatch(purpose);
+    if (rMatch != null) {
+      final part1 = double.tryParse(rMatch.group(1) ?? '');
+      final part2 = double.tryParse(rMatch.group(2) ?? '');
+      if (part1 != null && part2 != null) {
+        if (part2 > part1 && part1 > 0) {
+          // 1:5 split -> multiplier is part2 / part1
+          return (oldFaceValue: part2 / part1, newFaceValue: 1.0);
+        } else if (part1 > part2 && part2 > 0) {
+          // 5:1 split -> multiplier is part1 / part2
+          return (oldFaceValue: part1 / part2, newFaceValue: 1.0);
+        }
+      }
+    }
+
+    return null;
+  }
 
   /// Parses bonus ratio from an announcement purpose string.
   /// Examples:
@@ -717,6 +846,248 @@ class DividendSource {
             bonusShares: bonus,
             existingShares: denVal,
             purpose: 'Bonus Issue $bonus:$denVal ($splitRatio)',
+            source: 'YAHOO',
+          ));
+        }
+      }
+    }
+    return list;
+  }
+
+  // ─── Stock Splits Fetcher ──────────────────────────────────────────────────
+
+  /// Fetches historical stock splits for [ticker] on [exchange] ("NSE" or "BSE").
+  ///
+  /// Caches past splits permanently to disk for reliability and offline support.
+  /// Deduplicates across NSE, BSE, and Yahoo Finance feeds.
+  static Future<List<SplitEvent>> fetchStockSplits(
+    String ticker, {
+    String exchange = 'NSE',
+    String? scripCode,
+  }) async {
+    final cleanTicker = ticker.trim().toUpperCase();
+    final cleanExchange = exchange.trim().toUpperCase();
+
+    final cacheDir = await _getCacheDirectory();
+    final cacheFile = File('${cacheDir.path}/split_${cleanExchange}_$cleanTicker.json');
+
+    List<SplitEvent> cached = [];
+    if (await cacheFile.exists()) {
+      try {
+        final jsonStr = await cacheFile.readAsString();
+        final rawList = jsonDecode(jsonStr) as List<dynamic>;
+        cached = rawList
+            .map((e) => SplitEvent.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (e) {
+        developer.log('Error reading split cache for $cleanTicker: $e', name: 'DividendSource');
+      }
+    }
+
+    try {
+      final List<SplitEvent> fetched = [];
+
+      // 1. Try Exchange Corporate Actions
+      try {
+        if (cleanExchange == 'BSE') {
+          fetched.addAll(await _fetchBseSplits(cleanTicker, scripCode: scripCode));
+        } else {
+          fetched.addAll(await _fetchNseSplits(cleanTicker));
+        }
+      } catch (e) {
+        developer.log('Exchange split fetch failed for $cleanTicker: $e', name: 'DividendSource');
+      }
+
+      // 2. Query Yahoo Finance fallback
+      try {
+        final yEvents = await _fetchYahooSplits(cleanTicker, exchange: cleanExchange);
+        for (final yb in yEvents) {
+          final alreadyPresent = fetched.any((fb) =>
+              fb.recordDate.year == yb.recordDate.year &&
+              fb.recordDate.month == yb.recordDate.month &&
+              (fb.recordDate.day - yb.recordDate.day).abs() <= 2);
+          if (!alreadyPresent) {
+            fetched.add(yb);
+          }
+        }
+      } catch (e) {
+        developer.log('Yahoo split fetch error for $cleanTicker: $e', name: 'DividendSource');
+      }
+
+      // Merge fetched with cached
+      final map = <String, SplitEvent>{};
+      for (final ev in cached) {
+        final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.oldFaceValue}_${ev.newFaceValue}';
+        map[key] = ev;
+      }
+      for (final ev in fetched) {
+        final key = '${DateFormat('yyyyMMdd').format(ev.recordDate)}_${ev.oldFaceValue}_${ev.newFaceValue}';
+        map[key] = ev;
+      }
+
+      final merged = map.values.toList()
+        ..sort((a, b) => a.recordDate.compareTo(b.recordDate));
+
+      if (merged.isNotEmpty) {
+        await cacheFile.writeAsString(jsonEncode(merged.map((e) => e.toJson()).toList()));
+      }
+      return merged.isNotEmpty ? merged : cached;
+    } catch (e) {
+      return cached;
+    }
+  }
+
+  static Future<List<SplitEvent>> _fetchNseSplits(String symbol) async {
+    final client = httpClient ?? http.Client();
+    final apiUri = Uri.parse(
+        'https://www.nseindia.com/api/corporates-corporateActions?index=equities&symbol=${Uri.encodeComponent(symbol)}');
+
+    final apiResp = await client.get(
+      apiUri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Referer': 'https://www.nseindia.com/',
+      },
+    ).timeout(timeoutDuration);
+
+    if (apiResp.statusCode != 200) return [];
+    final rawData = jsonDecode(apiResp.body);
+    final List<dynamic> list;
+    if (rawData is List) {
+      list = rawData;
+    } else if (rawData is Map && rawData.containsKey('data')) {
+      list = rawData['data'] as List<dynamic>;
+    } else {
+      list = [];
+    }
+
+    final events = <SplitEvent>[];
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final subject = (item['subject'] ?? item['purpose'] ?? '').toString();
+      final ratio = parseSplitRatio(subject);
+      if (ratio == null) continue;
+
+      final recDateStr = (item['recDate'] ?? item['recDt'])?.toString();
+      final exDateStr = (item['exDate'] ?? item['exDt'])?.toString();
+      final recordDate = parseMarketDate(recDateStr) ?? parseMarketDate(exDateStr);
+      if (recordDate == null) continue;
+
+      events.add(SplitEvent(
+        recordDate: recordDate,
+        oldFaceValue: ratio.oldFaceValue,
+        newFaceValue: ratio.newFaceValue,
+        purpose: subject,
+        source: 'NSE',
+      ));
+    }
+    return events;
+  }
+
+  static Future<List<SplitEvent>> _fetchBseSplits(
+    String ticker, {
+    String? scripCode,
+  }) async {
+    String? effectiveScrip = scripCode;
+    if (effectiveScrip == null || effectiveScrip.isEmpty) {
+      final info = await getTickerInfoBySymbol(ticker, exchange: 'BSE');
+      effectiveScrip = info?.scripCode ?? (int.tryParse(ticker) != null ? ticker : null);
+    }
+    if (effectiveScrip == null || effectiveScrip.isEmpty) return [];
+
+    final client = httpClient ?? http.Client();
+    final apiUri = Uri.parse(
+      'https://api.bseindia.com/BseIndiaAPI/api/CorporateAction/w?'
+      'strCat=S&strPrevDate=20150101&strScrip=&strSearch=S&strToDate=20301231&strType=C&scripcode=$effectiveScrip',
+    );
+
+    final apiResp = await client.get(
+      apiUri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': 'https://www.bseindia.com/corporates/corporate_act.aspx',
+      },
+    ).timeout(timeoutDuration);
+
+    if (apiResp.statusCode != 200) return [];
+    final rawData = jsonDecode(apiResp.body);
+    final List<dynamic> list = rawData is Map && rawData.containsKey('Table')
+        ? (rawData['Table'] as List<dynamic>? ?? [])
+        : (rawData is List ? rawData : []);
+
+    final events = <SplitEvent>[];
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final purpose = (item['purpose_name'] ?? item['Purpose'] ?? '').toString();
+      final ratio = parseSplitRatio(purpose);
+      if (ratio == null) continue;
+
+      final dateStr = (item['BCRD_from'] ?? item['RD_DATE'] ?? item['RecordDate'])?.toString();
+      final recordDate = parseMarketDate(dateStr);
+      if (recordDate == null) continue;
+
+      events.add(SplitEvent(
+        recordDate: recordDate,
+        oldFaceValue: ratio.oldFaceValue,
+        newFaceValue: ratio.newFaceValue,
+        purpose: purpose,
+        source: 'BSE',
+      ));
+    }
+    return events;
+  }
+
+  static Future<List<SplitEvent>> _fetchYahooSplits(
+    String ticker, {
+    String exchange = 'NSE',
+  }) async {
+    final suffix = exchange.toUpperCase() == 'BSE' ? '.BO' : '.NS';
+    final symbol = '$ticker$suffix';
+    final uri = Uri.parse(
+        'https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=1mo&range=10y&events=split');
+
+    final client = httpClient ?? http.Client();
+    final resp = await client.get(
+      uri,
+      headers: {
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+      },
+    ).timeout(timeoutDuration);
+
+    if (resp.statusCode != 200) return [];
+    final jsonMap = jsonDecode(resp.body) as Map<String, dynamic>;
+    final chart = jsonMap['chart'] as Map<String, dynamic>?;
+    final results = chart?['result'] as List<dynamic>?;
+    if (results == null || results.isEmpty) return [];
+
+    final eventsMap = results.first['events'] as Map<String, dynamic>?;
+    final splitsMap = eventsMap?['splits'] as Map<String, dynamic>?;
+    if (splitsMap == null || splitsMap.isEmpty) return [];
+
+    final list = <SplitEvent>[];
+    for (final entry in splitsMap.values) {
+      if (entry is Map<String, dynamic>) {
+        final timestamp = entry['date'] as num?;
+        final numVal = (entry['numerator'] as num?)?.toDouble() ?? 0.0;
+        final denVal = (entry['denominator'] as num?)?.toDouble() ?? 0.0;
+        final splitRatio = (entry['splitRatio'] as String?) ?? '';
+
+        if (timestamp != null && numVal > denVal && denVal > 0) {
+          final date = DateTime.fromMillisecondsSinceEpoch(timestamp.toInt() * 1000);
+          list.add(SplitEvent(
+            recordDate: DateTime(date.year, date.month, date.day),
+            oldFaceValue: numVal,
+            newFaceValue: denVal,
+            purpose: 'Stock Split $numVal:$denVal ($splitRatio)',
             source: 'YAHOO',
           ));
         }

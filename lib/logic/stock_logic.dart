@@ -65,6 +65,8 @@ int compareTransactions(TxRecord a, TxRecord b) {
       switch (type.toUpperCase()) {
         case 'BUY':
           return 0;
+        case 'SPLIT':
+          return 1;
         case 'BONUS':
           return 1;
         case 'SELL':
@@ -85,10 +87,11 @@ int compareTransactions(TxRecord a, TxRecord b) {
 /// NOTE: Excludes all rows where [type] == "DIVIDEND" — dividends never
 /// participate in quantity, avg price, or invested value.
 ///
-/// Sort order: uses [compareTransactions] (date ASC, BUY before SELL on same date, id ASC).
+/// Sort order: uses [compareTransactions] (date ASC, BUY/SPLIT/BONUS before SELL on same date, id ASC).
 ///
 /// Algorithm:
 ///   BUY   → add to pool: new_avg = (pool_cost + buy_cost) / (pool_qty + buy_qty)
+///   SPLIT → adds additional split quantity with 0 cost: new_avg = pool_cost / (pool_qty + split_qty)
 ///   BONUS → adds quantity with 0 cost: new_avg = pool_cost / (pool_qty + bonus_qty)
 ///   SELL  → reduce quantity proportionally; cost basis per share is unchanged
 HoldingState computeHoldingState(List<TxRecord> transactions) {
@@ -102,9 +105,9 @@ HoldingState computeHoldingState(List<TxRecord> transactions) {
     if (type == 'BUY') {
       totalCost += tx.totalAmount;
       qty += tx.quantity;
-    } else if (type == 'BONUS') {
+    } else if (type == 'BONUS' || type == 'SPLIT') {
       qty += tx.quantity;
-      // Bonus shares cost 0, totalCost is unchanged
+      // Bonus / Split shares cost 0 additional invested capital, totalCost is unchanged
     } else {
       // SELL: reduce quantity; cost basis per remaining share is unchanged
       qty -= tx.quantity;
@@ -223,7 +226,7 @@ ValidationResult validateQuantityNeverNegative(
   int runningQty = 0;
   for (final tx in proposed) {
     final type = tx.type.toUpperCase();
-    if (type == 'BUY' || type == 'BONUS') {
+    if (type == 'BUY' || type == 'BONUS' || type == 'SPLIT') {
       runningQty += tx.quantity;
     } else {
       runningQty -= tx.quantity;

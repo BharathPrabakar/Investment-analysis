@@ -5,6 +5,24 @@
 
 ---
 
+### `97c6313` — 2026-10-23
+**Message:** `feat: implement stock splits auto-detection, ledger calculation, and UI badge`
+
+- **Category D Corporate Action — Stock Splits:**
+  - Added `SplitEvent` model with face value multiplier calculation and JSON serialization in [lib/services/dividend_source.dart](file:///c:/my_new_app/lib/services/dividend_source.dart).
+  - Implemented `parseSplitRatio` regex supporting Indian exchange announcement formats (`from Rs. X to Rs. Y`, `split 1:X`, `sub-division 1:X`).
+  - Added `fetchStockSplits` integrating NSE/BSE corporate action endpoints and Yahoo Finance fallback with persistent disk caching.
+  - Updated `StockLogic` ([lib/logic/stock_logic.dart](file:///c:/my_new_app/lib/logic/stock_logic.dart)):
+    - Set `SPLIT` transaction precedence equal to `BONUS` (1) ahead of `SELL` (2) and `DIVIDEND` (3).
+    - Updated `computeHoldingState` so `SPLIT` increases `quantityHeld` without adding invested capital, automatically adjusting weighted-average cost downwards ($Invested / TotalQty$).
+    - Replay validation recognizes `SPLIT` as non-negative quantity addition.
+  - Updated `StocksDao` ([lib/database/daos/stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart)) with `hasSplitTransaction` and `findSplitTransaction`.
+  - Integrated auto-detection replay in `StockCardDetailScreen` ([lib/stocks/stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart)), applying splits chronologically before bonuses and dividends. Added custom UI row styling with blue split icon and `"+X split shares credited · Face value sub-division"` badge.
+  - Added automated unit test suite ([test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart)) with 12 tests covering regex extraction, ledger math, WAC scaling, replay ordering, and DAO queries.
+  - Updated [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) Section 6 and [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md) Section 10.
+
+---
+
 ### `828e110` — 2026-10-23
 **Message:** `docs: formalize commit logging and push requirements in agent instructions`
 
