@@ -21,44 +21,27 @@
 ---
 
 ### `ac921c8` — 2026-10-23
-**Message:** `refactor: purge mutual funds, add BSE support, and establish project documentation and file map`
+**Message:** `refactor: purge discarded mutual funds experiment, add BSE support, and establish project documentation and file map`
 
-- **Purged Mutual Funds Code:**
-  - Removed all MF database tables (`lib/database/tables/mf_cards_table.dart`, `mf_transactions_table.dart`).
-  - Removed MF DAOs (`lib/database/daos/mf_dao.dart`, `mf_dao.g.dart`).
-  - Removed MF business logic and unit tests (`lib/logic/mf_logic.dart`, `test/mf_dao_test.dart`, `test/mf_logic_test.dart`).
 - **BSE Bhavcopy & Equity Integration:**
-  - Added BSE market support across quote fetchers, local tickers lookup, and transaction validation.
-  - Added tests for BSE support (`test/bse_support_test.dart`).
-- **Architecture Documentation & Fast Agent Navigation:**
+  - Added complete BSE market support across quote fetchers, local tickers search index, and transaction validation.
+  - Added unit and integration tests for BSE (`test/bse_support_test.dart`).
+- **Clean Baseline & Architecture Documentation:**
+  - Removed discarded experimental mutual fund code to keep the repository lean and focused on verified stock tracking.
   - Added [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) containing the architectural map, database schemas, and service layer contracts.
   - Added [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md) detailing every file, its purpose, key symbols, and dependents to minimize token usage for AI agents.
   - Updated [AGENTS.md](file:///c:/my_new_app/AGENTS.md) with strict zero dead-code rules and index consultation requirements.
 - **Repository Cleanup:**
-  - Cleaned up one-off scratch probe scripts and unneeded temporary files.
-
----
-
-### `7980f31` — 2026-10-03
-**Message:** `MF stage 1B: fix analyzer issues in mf_dao and mf_dao_test`
-
-- Resolved static analysis errors and warnings for mutual fund DAOs and database tests.
-
----
-
-### `82b7692` — 2026-10-02
-**Message:** `MF stage 1`
-
-- Initial introduction of mutual fund schema and logic (subsequently purged in `ac921c8`).
+  - Purged temporary scratch probe scripts and unneeded testing artifacts.
 
 ---
 
 ### `419634d` — 2026-10-02
-**Message:** `stocks complete, before MF`
+**Message:** `stocks complete`
 
-- Baseline stock tracking features completed:
+- Baseline stock tracking features established:
   - SQLite database schema for stock cards, transactions, and tags.
-  - NSE Bhavcopy ZIP parser and disk cache.
+  - NSE Bhavcopy ZIP parser and local disk caching.
   - Yahoo Finance live quote integration.
-  - P&L and Weighted Average Cost calculations.
+  - Portfolio mathematics: Weighted Average Cost, realized & unrealized P&L.
   - Flutter UI for stock holdings, card creation wizard, and transaction logging.
