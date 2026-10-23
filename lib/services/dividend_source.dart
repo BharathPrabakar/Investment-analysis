@@ -178,11 +178,12 @@ class DividendSource {
     if (purpose.trim().isEmpty) return null;
 
     final lower = purpose.toLowerCase();
-    // Must contain split or sub-division / subdivision keywords
+    // Must contain split, sub-division / subdivision, or consolidation keywords
     final isSplitAnnouncement = lower.contains('split') ||
         lower.contains('sub-division') ||
         lower.contains('sub division') ||
-        lower.contains('subdivision');
+        lower.contains('subdivision') ||
+        lower.contains('consolidation');
 
     if (!isSplitAnnouncement) return null;
 
@@ -195,7 +196,7 @@ class DividendSource {
     if (ftMatch != null) {
       final oldFv = double.tryParse(ftMatch.group(1) ?? '');
       final newFv = double.tryParse(ftMatch.group(2) ?? '');
-      if (oldFv != null && newFv != null && oldFv > newFv && newFv > 0) {
+      if (oldFv != null && newFv != null && oldFv > 0 && newFv > 0 && oldFv != newFv) {
         return (oldFaceValue: oldFv, newFaceValue: newFv);
       }
     }
@@ -209,14 +210,14 @@ class DividendSource {
     if (btMatch != null) {
       final oldFv = double.tryParse(btMatch.group(1) ?? '');
       final newFv = double.tryParse(btMatch.group(2) ?? '');
-      if (oldFv != null && newFv != null && oldFv > newFv && newFv > 0) {
+      if (oldFv != null && newFv != null && oldFv > 0 && newFv > 0 && oldFv != newFv) {
         return (oldFaceValue: oldFv, newFaceValue: newFv);
       }
     }
 
-    // Pattern 3: "split 1:5", "subdivision 1:10", "split 10:1"
+    // Pattern 3: "split 1:5", "subdivision 1:10", "split 10:1", "consolidation 10:1"
     final ratioRegex = RegExp(
-      r'(?:split|sub-?division).*?\b(\d+)\s*:\s*(\d+)\b',
+      r'(?:split|sub-?division|consolidation).*?\b(\d+)\s*:\s*(\d+)\b',
       caseSensitive: false,
     );
     final rMatch = ratioRegex.firstMatch(purpose);
@@ -224,12 +225,19 @@ class DividendSource {
       final part1 = double.tryParse(rMatch.group(1) ?? '');
       final part2 = double.tryParse(rMatch.group(2) ?? '');
       if (part1 != null && part2 != null) {
-        if (part2 > part1 && part1 > 0) {
-          // 1:5 split -> multiplier is part2 / part1
-          return (oldFaceValue: part2 / part1, newFaceValue: 1.0);
-        } else if (part1 > part2 && part2 > 0) {
-          // 5:1 split -> multiplier is part1 / part2
-          return (oldFaceValue: part1 / part2, newFaceValue: 1.0);
+        if (lower.contains('consolidation')) {
+          // Consolidation 10:1 merges 10 into 1 -> oldFv: 1, newFv: 10
+          if (part1 > part2 && part2 > 0) {
+            return (oldFaceValue: 1.0, newFaceValue: part1 / part2);
+          }
+        } else {
+          if (part2 > part1 && part1 > 0) {
+            // 1:5 split -> multiplier is part2 / part1
+            return (oldFaceValue: part2 / part1, newFaceValue: 1.0);
+          } else if (part1 > part2 && part2 > 0) {
+            // 5:1 split -> multiplier is part1 / part2
+            return (oldFaceValue: part1 / part2, newFaceValue: 1.0);
+          }
         }
       }
     }

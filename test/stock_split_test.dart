@@ -55,6 +55,13 @@ void main() {
       expect(ratio.newFaceValue, 1.0);
     });
 
+    test('parses Consolidation / Reverse Split 10:1', () {
+      final ratio = DividendSource.parseSplitRatio('Consolidation of shares 10:1');
+      expect(ratio, isNotNull);
+      expect(ratio!.oldFaceValue, 1.0);
+      expect(ratio.newFaceValue, 10.0);
+    });
+
     test('returns null for unrelated corporate actions', () {
       expect(DividendSource.parseSplitRatio('Dividend - Rs 5 per share'), isNull);
       expect(DividendSource.parseSplitRatio('Bonus issue 1:1'), isNull);
@@ -202,9 +209,70 @@ void main() {
       expect(compareTransactions(bonus, sell), -1); // BONUS (1) before SELL (2)
       expect(compareTransactions(sell, div), -1);   // SELL (2) before DIVIDEND (3)
     });
+
+    test('CONSOLIDATION reduces shares while conserving invested value', () {
+      final txs = [
+        TxRecord(
+          id: 1,
+          date: DateTime(2023, 1, 15),
+          type: 'BUY',
+          price: 10.0,
+          quantity: 1000,
+          totalAmount: 10000.0,
+        ),
+        // Reverse split 10:1 merges 1,000 into 100 shares (-900 merged)
+        TxRecord(
+          id: 2,
+          date: DateTime(2023, 6, 1),
+          type: 'CONSOLIDATION',
+          price: 0.0,
+          quantity: 900,
+          totalAmount: 0.0,
+        ),
+      ];
+
+      final state = computeHoldingState(txs);
+      expect(state.quantityHeld, 100);
+      expect(state.investedValue, 10000.0);
+      expect(state.avgBuyPrice, 100.0); // 10,000 / 100 = 100
+    });
+
+    test('FRACTIONAL_CASH is included in cash returns without affecting share count or invested value', () {
+      final txs = [
+        TxRecord(
+          id: 1,
+          date: DateTime(2023, 1, 15),
+          type: 'BUY',
+          price: 100.0,
+          quantity: 5,
+          totalAmount: 500.0,
+        ),
+        TxRecord(
+          id: 2,
+          date: DateTime(2023, 6, 1),
+          type: 'BONUS',
+          price: 0.0,
+          quantity: 2,
+          totalAmount: 0.0,
+        ),
+        TxRecord(
+          id: 3,
+          date: DateTime(2023, 6, 1),
+          type: 'FRACTIONAL_CASH',
+          price: 100.0,
+          quantity: 0,
+          totalAmount: 50.0, // 0.5 * 100
+        ),
+      ];
+
+      final state = computeHoldingState(txs);
+      expect(state.quantityHeld, 7); // 5 + 2
+      expect(state.investedValue, 500.0);
+      expect(totalDividendEarned(txs), 50.0);
+    });
   });
 
-  group('StocksDao - Split Transactions Database Operations', () {
+  group('StocksDao - Split & Consolidation Database Operations', () {
     late AppDatabase db;
 
     setUp(() {
@@ -257,6 +325,50 @@ void main() {
       expect(found!.type, 'SPLIT');
       expect(found.quantity, 100);
       expect(found.price, 0.0);
+    });
+
+    test('insert and query consolidation and fractional cash transactions', () async {
+      final cardId = await db.stocksDao.insertCard(
+        const StockCardsCompanion(
+          ticker: Value('SUZLON'),
+          exchange: Value('BSE'),
+          stockName: Value('Suzlon Energy'),
+        ),
+      );
+
+      final eventDate = DateTime(2023, 8, 1);
+      await db.stocksDao.insertTransaction(
+        StockTransactionsCompanion.insert(
+          cardId: cardId,
+          date: eventDate,
+          type: 'CONSOLIDATION',
+          price: 0.0,
+          quantity: 90,
+          totalAmount: 0.0,
+          entryMode: 'AUTO',
+        ),
+      );
+
+      await db.stocksDao.insertTransaction(
+        StockTransactionsCompanion.insert(
+          cardId: cardId,
+          date: eventDate,
+          type: 'FRACTIONAL_CASH',
+          price: 15.0,
+          quantity: 0,
+          totalAmount: 7.5,
+          entryMode: 'AUTO',
+        ),
+      );
+
+      expect(await db.stocksDao.hasConsolidationTransaction(cardId: cardId, date: eventDate), isTrue);
+      expect(await db.stocksDao.hasFractionalCashTransaction(cardId: cardId, date: eventDate), isTrue);
+
+      final cons = await db.stocksDao.findConsolidationTransaction(cardId: cardId, date: eventDate);
+      expect(cons?.quantity, 90);
+
+      final frac = await db.stocksDao.findFractionalCashTransaction(cardId: cardId, date: eventDate);
+      expect(frac?.totalAmount, 7.5);
     });
   });
 }

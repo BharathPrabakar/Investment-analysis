@@ -841,7 +841,7 @@ class _Step3TransactionState extends State<_Step3Transaction> {
       }
 
       final enteredPrice = double.tryParse(_priceCtrl.text);
-      if (enteredPrice == null || enteredPrice < _priceRange!.low || enteredPrice > _priceRange!.high) {
+      if (enteredPrice == null || !_priceRange!.containsPrice(enteredPrice)) {
         _formKey.currentState!.validate();
         return;
       }
@@ -1034,7 +1034,7 @@ class _Step3TransactionState extends State<_Step3Transaction> {
                   if (_priceRange == null) {
                     return 'Day price range not loaded yet';
                   }
-                  if (p < _priceRange!.low || p > _priceRange!.high) {
+                  if (!_priceRange!.containsPrice(p)) {
                     return 'Price outside range ₹${_fmt.format(_priceRange!.low)} – ₹${_fmt.format(_priceRange!.high)}';
                   }
                 }

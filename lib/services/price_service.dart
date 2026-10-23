@@ -35,6 +35,20 @@ class PriceRange {
 
   const PriceRange({required this.low, required this.high});
 
+  /// Validates whether [price] is within this day's traded range.
+  ///
+  /// On circuit-freeze days where low == high (e.g. Upper/Lower Circuit locked all day),
+  /// a standard market tolerance of +/-0.2% (minimum 5 paise Indian exchange tick size)
+  /// is permitted to allow for broker execution rounding and tick limits.
+  bool containsPrice(double price) {
+    if (low == high) {
+      final tolerance = (low * 0.002).clamp(0.05, 5.0);
+      return price >= (low - tolerance - 0.0001) && price <= (high + tolerance + 0.0001);
+    }
+    // Float epsilon 0.0001
+    return price >= (low - 0.0001) && price <= (high + 0.0001);
+  }
+
   @override
   String toString() => 'PriceRange(low: $low, high: $high)';
 }

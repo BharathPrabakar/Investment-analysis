@@ -266,6 +266,62 @@ class StocksDao extends DatabaseAccessor<AppDatabase> with _$StocksDaoMixin {
         .getSingleOrNull();
   }
 
+  /// Checks if a share consolidation / reverse split transaction already exists for this card and date.
+  Future<bool> hasConsolidationTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final existing = await findConsolidationTransaction(
+      cardId: cardId,
+      date: date,
+    );
+    return existing != null;
+  }
+
+  /// Finds an existing consolidation transaction for this card and date.
+  Future<StockTransaction?> findConsolidationTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final dateStart = DateTime(date.year, date.month, date.day);
+    final dateEnd = dateStart.add(const Duration(days: 1));
+    return (select(stockTransactions)
+          ..where((t) =>
+              t.cardId.equals(cardId) &
+              t.type.equals('CONSOLIDATION') &
+              t.date.isBiggerOrEqualValue(dateStart) &
+              t.date.isSmallerThanValue(dateEnd)))
+        .getSingleOrNull();
+  }
+
+  /// Checks if a fractional cash bonus settlement transaction already exists for this card and date.
+  Future<bool> hasFractionalCashTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final existing = await findFractionalCashTransaction(
+      cardId: cardId,
+      date: date,
+    );
+    return existing != null;
+  }
+
+  /// Finds an existing fractional cash settlement transaction for this card and date.
+  Future<StockTransaction?> findFractionalCashTransaction({
+    required int cardId,
+    required DateTime date,
+  }) async {
+    final dateStart = DateTime(date.year, date.month, date.day);
+    final dateEnd = dateStart.add(const Duration(days: 1));
+    return (select(stockTransactions)
+          ..where((t) =>
+              t.cardId.equals(cardId) &
+              t.type.equals('FRACTIONAL_CASH') &
+              t.date.isBiggerOrEqualValue(dateStart) &
+              t.date.isSmallerThanValue(dateEnd)))
+        .getSingleOrNull();
+  }
+
   /// Merge into an existing transaction (duplicate merge).
   Future<void> mergeIntoExistingTransaction({
     required int txId,

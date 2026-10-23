@@ -150,52 +150,103 @@ class StockCardDetailState extends State<StockCardDetail> {
             date: split.recordDate,
           );
 
-          if (holdingAsOf.quantityHeld > 0 && split.newFaceValue > 0 && split.oldFaceValue > split.newFaceValue) {
-            // Net added shares: (heldQty * multiplier) - heldQty
-            // Multiplier = oldFaceValue / newFaceValue
-            // e.g. 10 shares split 10:2 (multiplier 5) -> new total is 50, added is 40.
-            final addedQty = ((holdingAsOf.quantityHeld * split.oldFaceValue) / split.newFaceValue).round() - holdingAsOf.quantityHeld;
-            if (addedQty > 0) {
-              int splitTxId;
-              if (existingSplit != null) {
-                splitTxId = existingSplit.id;
-                if (existingSplit.quantity != addedQty) {
-                  await dao.updateTransaction(
-                    StockTransactionsCompanion(
-                      id: Value(existingSplit.id),
-                      cardId: Value(currentCard.id),
-                      type: const Value('SPLIT'),
-                      entryMode: const Value('AUTO'),
-                      date: Value(split.recordDate),
-                      price: const Value(0.0),
-                      quantity: Value(addedQty),
-                      totalAmount: const Value(0.0),
+          if (holdingAsOf.quantityHeld > 0 && split.newFaceValue > 0) {
+            if (split.oldFaceValue > split.newFaceValue) {
+              // Stock Split: increases share count (FV sub-division)
+              final addedQty = ((holdingAsOf.quantityHeld * split.oldFaceValue) / split.newFaceValue).round() - holdingAsOf.quantityHeld;
+              if (addedQty > 0) {
+                int splitTxId;
+                if (existingSplit != null) {
+                  splitTxId = existingSplit.id;
+                  if (existingSplit.quantity != addedQty) {
+                    await dao.updateTransaction(
+                      StockTransactionsCompanion(
+                        id: Value(existingSplit.id),
+                        cardId: Value(currentCard.id),
+                        type: const Value('SPLIT'),
+                        entryMode: const Value('AUTO'),
+                        date: Value(split.recordDate),
+                        price: const Value(0.0),
+                        quantity: Value(addedQty),
+                        totalAmount: const Value(0.0),
+                      ),
+                    );
+                  }
+                } else {
+                  splitTxId = await dao.insertTransaction(
+                    StockTransactionsCompanion.insert(
+                      cardId: currentCard.id,
+                      type: 'SPLIT',
+                      entryMode: 'AUTO',
+                      date: split.recordDate,
+                      price: 0.0,
+                      quantity: addedQty,
+                      totalAmount: 0.0,
                     ),
                   );
                 }
-              } else {
-                splitTxId = await dao.insertTransaction(
-                  StockTransactionsCompanion.insert(
-                    cardId: currentCard.id,
-                    type: 'SPLIT',
-                    entryMode: 'AUTO',
-                    date: split.recordDate,
-                    price: 0.0,
-                    quantity: addedQty,
-                    totalAmount: 0.0,
-                  ),
-                );
+                validAutoTxIds.add(splitTxId);
+                txRecords.add(TxRecord(
+                  id: splitTxId,
+                  type: 'SPLIT',
+                  date: split.recordDate,
+                  price: 0.0,
+                  quantity: addedQty,
+                  totalAmount: 0.0,
+                ));
+                txRecords.sort(compareTransactions);
               }
-              validAutoTxIds.add(splitTxId);
-              txRecords.add(TxRecord(
-                id: splitTxId,
-                type: 'SPLIT',
-                date: split.recordDate,
-                price: 0.0,
-                quantity: addedQty,
-                totalAmount: 0.0,
-              ));
-              txRecords.sort(compareTransactions);
+            } else if (split.newFaceValue > split.oldFaceValue) {
+              // Reverse Split / Consolidation: merges multiple shares into 1
+              // e.g. 100 shares held, FV 1 to 10 (multiplier 0.1) -> new count 10, reducedQty = 90
+              final newCount = ((holdingAsOf.quantityHeld * split.oldFaceValue) / split.newFaceValue).round();
+              final reducedQty = holdingAsOf.quantityHeld - newCount;
+              if (reducedQty > 0) {
+                final existingConsolidation = await dao.findConsolidationTransaction(
+                  cardId: currentCard.id,
+                  date: split.recordDate,
+                );
+                int consTxId;
+                if (existingConsolidation != null) {
+                  consTxId = existingConsolidation.id;
+                  if (existingConsolidation.quantity != reducedQty) {
+                    await dao.updateTransaction(
+                      StockTransactionsCompanion(
+                        id: Value(existingConsolidation.id),
+                        cardId: Value(currentCard.id),
+                        type: const Value('CONSOLIDATION'),
+                        entryMode: const Value('AUTO'),
+                        date: Value(split.recordDate),
+                        price: const Value(0.0),
+                        quantity: Value(reducedQty),
+                        totalAmount: const Value(0.0),
+                      ),
+                    );
+                  }
+                } else {
+                  consTxId = await dao.insertTransaction(
+                    StockTransactionsCompanion.insert(
+                      cardId: currentCard.id,
+                      type: 'CONSOLIDATION',
+                      entryMode: 'AUTO',
+                      date: split.recordDate,
+                      price: 0.0,
+                      quantity: reducedQty,
+                      totalAmount: 0.0,
+                    ),
+                  );
+                }
+                validAutoTxIds.add(consTxId);
+                txRecords.add(TxRecord(
+                  id: consTxId,
+                  type: 'CONSOLIDATION',
+                  date: split.recordDate,
+                  price: 0.0,
+                  quantity: reducedQty,
+                  totalAmount: 0.0,
+                ));
+                txRecords.sort(compareTransactions);
+              }
             }
           }
         }
@@ -267,6 +318,60 @@ class StockCardDetailState extends State<StockCardDetail> {
                 totalAmount: 0.0,
               ));
               txRecords.sort(compareTransactions);
+            }
+
+            // Check for fractional bonus entitlements settled in cash:
+            // e.g. holding 5 shares with 1:2 bonus leaves 0.5 fractional entitlement
+            final remainder = (holdingAsOf.quantityHeld * bonus.bonusShares) % bonus.existingShares;
+            if (remainder > 0) {
+              final fracFraction = remainder / bonus.existingShares;
+              // Value fraction against holding average cost or price
+              final fracCashAmount = double.parse((fracFraction * holdingAsOf.avgBuyPrice).toStringAsFixed(2));
+              if (fracCashAmount > 0) {
+                final existingFrac = await dao.findFractionalCashTransaction(
+                  cardId: currentCard.id,
+                  date: bonus.recordDate,
+                );
+                int fracTxId;
+                if (existingFrac != null) {
+                  fracTxId = existingFrac.id;
+                  if ((existingFrac.totalAmount - fracCashAmount).abs() > 0.001) {
+                    await dao.updateTransaction(
+                      StockTransactionsCompanion(
+                        id: Value(existingFrac.id),
+                        cardId: Value(currentCard.id),
+                        type: const Value('FRACTIONAL_CASH'),
+                        entryMode: const Value('AUTO'),
+                        date: Value(bonus.recordDate),
+                        price: Value(holdingAsOf.avgBuyPrice),
+                        quantity: const Value(0),
+                        totalAmount: Value(fracCashAmount),
+                      ),
+                    );
+                  }
+                } else {
+                  fracTxId = await dao.insertTransaction(
+                    StockTransactionsCompanion.insert(
+                      cardId: currentCard.id,
+                      type: 'FRACTIONAL_CASH',
+                      entryMode: 'AUTO',
+                      date: bonus.recordDate,
+                      price: holdingAsOf.avgBuyPrice,
+                      quantity: 0,
+                      totalAmount: fracCashAmount,
+                    ),
+                  );
+                }
+                validAutoTxIds.add(fracTxId);
+                txRecords.add(TxRecord(
+                  id: fracTxId,
+                  type: 'FRACTIONAL_CASH',
+                  date: bonus.recordDate,
+                  price: holdingAsOf.avgBuyPrice,
+                  quantity: 0,
+                  totalAmount: fracCashAmount,
+                ));
+              }
             }
           }
         }
@@ -1189,6 +1294,144 @@ class _TransactionRow extends StatelessWidget {
             icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
             tooltip: 'Remove split entry',
             onPressed: onDelete,
+          ),
+        ),
+      );
+    }
+
+    final isConsolidation = tx.type.toUpperCase() == 'CONSOLIDATION';
+    if (isConsolidation) {
+      return Dismissible(
+        key: Key('tx_${tx.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          color: cs.errorContainer,
+          child: Icon(Icons.delete_outline, color: cs.onErrorContainer),
+        ),
+        confirmDismiss: (_) async {
+          onDelete();
+          return false;
+        },
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.amber.withValues(alpha: 0.15),
+            child: const Icon(
+              Icons.call_merge,
+              color: Colors.amber,
+              size: 18,
+            ),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'CONSOLIDATION',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    color: Colors.amber,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                dateFmt.format(tx.date),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: cs.onSurface.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          subtitle: Text(
+            '-${tx.quantity} shares merged · Reverse split (capital preserved)',
+            style: TextStyle(
+              fontSize: 13,
+              color: cs.onSurface.withValues(alpha: 0.7),
+            ),
+          ),
+          trailing: IconButton(
+            icon: Icon(Icons.delete_outline, size: 18, color: cs.error),
+            tooltip: 'Remove consolidation entry',
+            onPressed: onDelete,
+          ),
+        ),
+      );
+    }
+
+    final isFractionalCash = tx.type.toUpperCase() == 'FRACTIONAL_CASH';
+    if (isFractionalCash) {
+      return Dismissible(
+        key: Key('tx_${tx.id}'),
+        direction: DismissDirection.endToStart,
+        background: Container(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 20),
+          color: cs.errorContainer,
+          child: Icon(Icons.delete_outline, color: cs.onErrorContainer),
+        ),
+        confirmDismiss: (_) async {
+          onDelete();
+          return false;
+        },
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: const Color(0xFF1B8A4C).withValues(alpha: 0.15),
+            child: const Icon(
+              Icons.payments_outlined,
+              color: Color(0xFF1B8A4C),
+              size: 18,
+            ),
+          ),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1B8A4C).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'FRACTIONAL CASH',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    color: Color(0xFF1B8A4C),
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                dateFmt.format(tx.date),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: cs.onSurface.withValues(alpha: 0.7),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          subtitle: const Text(
+            'Fractional bonus entitlement settled in cash',
+            style: TextStyle(fontSize: 13),
+          ),
+          trailing: Text(
+            '+ ₹${fmt.format(tx.totalAmount)}',
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1B8A4C),
+            ),
           ),
         ),
       );

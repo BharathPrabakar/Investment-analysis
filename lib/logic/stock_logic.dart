@@ -66,12 +66,13 @@ int compareTransactions(TxRecord a, TxRecord b) {
         case 'BUY':
           return 0;
         case 'SPLIT':
-          return 1;
         case 'BONUS':
+        case 'CONSOLIDATION':
           return 1;
         case 'SELL':
           return 2;
         case 'DIVIDEND':
+        case 'FRACTIONAL_CASH':
           return 3;
         default:
           return 4;
@@ -84,18 +85,22 @@ int compareTransactions(TxRecord a, TxRecord b) {
 
 /// Compute the current [HoldingState] from [transactions].
 ///
-/// NOTE: Excludes all rows where [type] == "DIVIDEND" — dividends never
+/// NOTE: Excludes all rows where [type] == "DIVIDEND" or "FRACTIONAL_CASH" — cash payouts never
 /// participate in quantity, avg price, or invested value.
 ///
-/// Sort order: uses [compareTransactions] (date ASC, BUY/SPLIT/BONUS before SELL on same date, id ASC).
+/// Sort order: uses [compareTransactions] (date ASC, BUY/SPLIT/BONUS/CONSOLIDATION before SELL on same date, id ASC).
 ///
 /// Algorithm:
-///   BUY   → add to pool: new_avg = (pool_cost + buy_cost) / (pool_qty + buy_qty)
-///   SPLIT → adds additional split quantity with 0 cost: new_avg = pool_cost / (pool_qty + split_qty)
-///   BONUS → adds quantity with 0 cost: new_avg = pool_cost / (pool_qty + bonus_qty)
-///   SELL  → reduce quantity proportionally; cost basis per share is unchanged
+///   BUY           → add to pool: new_avg = (pool_cost + buy_cost) / (pool_qty + buy_qty)
+///   SPLIT         → adds additional split quantity with 0 cost: new_avg = pool_cost / (pool_qty + split_qty)
+///   BONUS         → adds quantity with 0 cost: new_avg = pool_cost / (pool_qty + bonus_qty)
+///   CONSOLIDATION → reduces quantity (shares merged) while preserving totalCost: new_avg = pool_cost / (pool_qty - consolidated_qty)
+///   SELL          → reduce quantity proportionally; cost basis per share is unchanged
 HoldingState computeHoldingState(List<TxRecord> transactions) {
-  final buySellTx = transactions.where((t) => t.type.toUpperCase() != 'DIVIDEND');
+  final buySellTx = transactions.where((t) {
+    final type = t.type.toUpperCase();
+    return type != 'DIVIDEND' && type != 'FRACTIONAL_CASH';
+  });
   final sorted = List.of(buySellTx)..sort(compareTransactions);
   int qty = 0;
   double totalCost = 0;
@@ -108,6 +113,11 @@ HoldingState computeHoldingState(List<TxRecord> transactions) {
     } else if (type == 'BONUS' || type == 'SPLIT') {
       qty += tx.quantity;
       // Bonus / Split shares cost 0 additional invested capital, totalCost is unchanged
+    } else if (type == 'CONSOLIDATION') {
+      // Reverse Split / Consolidation reduces shares held while conserving invested capital
+      qty -= tx.quantity;
+      if (qty < 0) qty = 0;
+      if (qty == 0) totalCost = 0;
     } else {
       // SELL: reduce quantity; cost basis per remaining share is unchanged
       qty -= tx.quantity;
@@ -132,11 +142,12 @@ HoldingState computeHoldingState(List<TxRecord> transactions) {
   );
 }
 
-/// Computes the total dividend payout earned across all DIVIDEND transactions.
+/// Computes the total dividend and fractional corporate action cash payout earned.
 double totalDividendEarned(List<TxRecord> transactions) {
   double total = 0;
   for (final tx in transactions) {
-    if (tx.type.toUpperCase() == 'DIVIDEND') {
+    final type = tx.type.toUpperCase();
+    if (type == 'DIVIDEND' || type == 'FRACTIONAL_CASH') {
       total += tx.totalAmount;
     }
   }
@@ -200,26 +211,33 @@ ValidationResult validateQuantityNeverNegative(
   List<TxRecord> existing,
   ProposedOp op,
 ) {
-  // Build the proposed list excluding existing DIVIDEND rows
-  List<TxRecord> proposed = existing
-      .where((t) => t.type.toUpperCase() != 'DIVIDEND')
-      .toList();
+  // Build the proposed list excluding cash payout rows (DIVIDEND, FRACTIONAL_CASH)
+  List<TxRecord> proposed = existing.where((t) {
+    final type = t.type.toUpperCase();
+    return type != 'DIVIDEND' && type != 'FRACTIONAL_CASH';
+  }).toList();
 
   switch (op.kind) {
     case ProposedOpKind.delete:
       proposed.removeWhere((t) => t.id == op.deleteId);
     case ProposedOpKind.add:
-      if (op.record != null && op.record!.type.toUpperCase() != 'DIVIDEND') {
-        proposed.add(op.record!);
+      if (op.record != null) {
+        final type = op.record!.type.toUpperCase();
+        if (type != 'DIVIDEND' && type != 'FRACTIONAL_CASH') {
+          proposed.add(op.record!);
+        }
       }
     case ProposedOpKind.edit:
       proposed.removeWhere((t) => t.id == op.editTargetId);
-      if (op.record != null && op.record!.type.toUpperCase() != 'DIVIDEND') {
-        proposed.add(op.record!);
+      if (op.record != null) {
+        final type = op.record!.type.toUpperCase();
+        if (type != 'DIVIDEND' && type != 'FRACTIONAL_CASH') {
+          proposed.add(op.record!);
+        }
       }
   }
 
-  // Sort: shared ordering (date ASC, BUY before SELL on same date, id ASC)
+  // Sort: shared ordering (date ASC, BUY/SPLIT/BONUS/CONSOLIDATION before SELL on same date, id ASC)
   proposed.sort(compareTransactions);
 
   // Replay
@@ -229,6 +247,7 @@ ValidationResult validateQuantityNeverNegative(
     if (type == 'BUY' || type == 'BONUS' || type == 'SPLIT') {
       runningQty += tx.quantity;
     } else {
+      // SELL and CONSOLIDATION reduce quantity
       runningQty -= tx.quantity;
       if (runningQty < 0) {
         return ValidationResult.invalid(tx);

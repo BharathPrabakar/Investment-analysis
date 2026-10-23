@@ -301,7 +301,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
       }
 
       final enteredPrice = double.tryParse(_priceCtrl.text);
-      if (enteredPrice == null || enteredPrice < _priceRange!.low || enteredPrice > _priceRange!.high) {
+      if (enteredPrice == null || !_priceRange!.containsPrice(enteredPrice)) {
         _formKey.currentState!.validate();
         return;
       }
@@ -686,7 +686,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                     if (_priceRange == null) {
                       return 'Day price range not loaded yet';
                     }
-                    if (price < _priceRange!.low || price > _priceRange!.high) {
+                    if (!_priceRange!.containsPrice(price)) {
                       return 'Price must be within range '
                           '₹${_fmt.format(_priceRange!.low)} – ₹${_fmt.format(_priceRange!.high)}';
                     }
