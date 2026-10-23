@@ -60,6 +60,22 @@ void main() {
       expect(DividendSource.parseSplitRatio('Bonus issue 1:1'), isNull);
       expect(DividendSource.parseSplitRatio('Annual General Meeting'), isNull);
     });
+
+    test('parseDividendAmount ignores stock split and sub-division announcements', () {
+      expect(
+        DividendSource.parseDividendAmount(
+            'Face Value Split (Sub-Division) - From Rs 10/- Per Share To Rs 2/- Per Share'),
+        isNull,
+      );
+      expect(
+        DividendSource.parseDividendAmount('Stock Split from Rs.5/- to Rs.1/- per share'),
+        isNull,
+      );
+      expect(
+        DividendSource.parseDividendAmount('Interim Dividend - Rs 12 Per Share'),
+        12.0,
+      );
+    });
   });
 
   group('Stock Splits - Logic & Ledger Computation', () {

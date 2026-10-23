@@ -207,6 +207,12 @@ class StockCardDetailState extends State<StockCardDetail> {
         }).toList();
 
         for (final bonus in bonusesOnDate) {
+          // If a split already executed on curDate and the bonus originated from YAHOO,
+          // ignore it as it is a duplicated split representation
+          if (splitsOnDate.isNotEmpty && bonus.source == 'YAHOO') {
+            continue;
+          }
+
           final txsUpToDate = txRecords.where((t) {
             final tDate = DateTime(t.date.year, t.date.month, t.date.day);
             return !tDate.isAfter(curDate);

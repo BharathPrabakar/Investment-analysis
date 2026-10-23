@@ -271,6 +271,22 @@ class DividendSource {
   static double? parseDividendAmount(String purpose) {
     if (purpose.trim().isEmpty) return null;
 
+    final lower = purpose.toLowerCase();
+    // Guard against stock split/sub-division announcements being misparsed as dividends
+    final hasSplitKeywords = lower.contains('split') ||
+        lower.contains('sub-division') ||
+        lower.contains('sub division') ||
+        lower.contains('subdivision');
+    // Note: Do NOT use .contains('div') because 'sub-division' contains 'div'!
+    final hasDividendKeywords = lower.contains('dividend') ||
+        lower.contains('interim') ||
+        lower.contains('final') ||
+        RegExp(r'\bdiv\b').hasMatch(lower);
+
+    if (hasSplitKeywords && !hasDividendKeywords) {
+      return null;
+    }
+
     // Look for Rs. / Rs / Re. / Re followed by a decimal number and optionally "Per Share"
     // Regex matches e.g. "Rs 12", "Rs. 5.50", "Re 1", "Re. 0.50"
     final regex = RegExp(
@@ -476,7 +492,20 @@ class DividendSource {
     for (final item in list) {
       if (item is! Map<String, dynamic>) continue;
       final subject = (item['subject'] ?? item['purpose'] ?? '').toString();
-      if (!subject.toLowerCase().contains('div')) continue;
+      final subLower = subject.toLowerCase();
+      // Must explicitly mention dividend, interim, special div, or div - not bare "sub-division"
+      final isSubDivision = subLower.contains('sub-division') ||
+          subLower.contains('sub division') ||
+          subLower.contains('subdivision');
+      final isRealDiv = subLower.contains('dividend') ||
+          subLower.contains('interim') ||
+          subLower.contains('final') ||
+          subLower.contains('special') ||
+          RegExp(r'\bdiv\b').hasMatch(subLower);
+
+      if (!isRealDiv || (isSubDivision && !subLower.contains('dividend'))) {
+        continue;
+      }
 
       final amount = parseDividendAmount(subject);
       if (amount == null || amount <= 0) continue;
@@ -655,15 +684,22 @@ class DividendSource {
         developer.log('Exchange bonus fetch failed for $cleanTicker: $e', name: 'DividendSource');
       }
 
-      // 2. Query Yahoo Finance fallback
+      // 2. Query Yahoo Finance fallback ONLY for dates not identified as Stock Splits
+      // Note: Yahoo represents both bonus issues and splits under events=split.
+      // Exchange corporate action feeds (NSE/BSE) are the authoritative source.
       try {
+        final splitEvents = await fetchStockSplits(cleanTicker, exchange: cleanExchange, scripCode: scripCode);
         final yEvents = await _fetchYahooBonus(cleanTicker, exchange: cleanExchange);
         for (final yb in yEvents) {
-          final alreadyPresent = fetched.any((fb) =>
+          final alreadyPresentInBonus = fetched.any((fb) =>
               fb.recordDate.year == yb.recordDate.year &&
               fb.recordDate.month == yb.recordDate.month &&
               (fb.recordDate.day - yb.recordDate.day).abs() <= 2);
-          if (!alreadyPresent) {
+          final isActuallySplit = splitEvents.any((sp) =>
+              sp.recordDate.year == yb.recordDate.year &&
+              sp.recordDate.month == yb.recordDate.month &&
+              (sp.recordDate.day - yb.recordDate.day).abs() <= 2);
+          if (!alreadyPresentInBonus && !isActuallySplit) {
             fetched.add(yb);
           }
         }

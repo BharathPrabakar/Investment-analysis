@@ -5,7 +5,20 @@
 
 ---
 
-### `97c6313` — 2026-10-23
+### `c1c52bb` — 2026-10-23
+**Message:** `fix: prevent false dividends and duplicate bonuses from stock sub-division corporate actions`
+
+- **Corporate Action Disambiguation & Hardened Filtering:**
+  - Resolved keyword false positive where `"sub-division"` was detected as `"div"` and its face value numbers (e.g. `Rs 10 to Rs 2`) were summed into an erroneous ₹12 cash dividend.
+  - Hardened `parseDividendAmount` in [lib/services/dividend_source.dart](file:///c:/my_new_app/lib/services/dividend_source.dart) to reject strings containing split/sub-division keywords unless explicit per-share dividend keywords are present.
+  - Tightened NSE and BSE corporate action subject matching to require whole words (`dividend`, `interim`, `final`, `special`, or whole word `div`).
+  - Guarded `fetchBonusIssues` and `StockCardDetailScreen` ([lib/stocks/stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart)) so Yahoo Finance `events=split` events matching an existing stock split on the same date are never duplicated as bonus issues.
+  - Added test case in [test/stock_split_test.dart](file:///c:/my_new_app/test/stock_split_test.dart) verifying sub-division announcements are rejected by `parseDividendAmount`.
+  - Updated [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md) Section 6 with disambiguation safeguards.
+
+---
+
+### `f90fbd2` — 2026-10-23
 **Message:** `feat: implement stock splits auto-detection, ledger calculation, and UI badge`
 
 - **Category D Corporate Action — Stock Splits:**
