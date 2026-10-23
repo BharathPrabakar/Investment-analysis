@@ -370,5 +370,70 @@ void main() {
       final frac = await db.stocksDao.findFractionalCashTransaction(cardId: cardId, date: eventDate);
       expect(frac?.totalAmount, 7.5);
     });
+
+    test('insert and query RIGHTS and BUYBACK transactions with correct ledger math', () async {
+      final cardId = await db.stocksDao.insertCard(
+        const StockCardsCompanion(
+          ticker: Value('RELIANCE'),
+          exchange: Value('NSE'),
+          stockName: Value('Reliance Industries Limited'),
+        ),
+      );
+
+      // Normal initial buy
+      await db.stocksDao.insertTransaction(
+        StockTransactionsCompanion.insert(
+          cardId: cardId,
+          date: DateTime(2020, 1, 15),
+          type: 'BUY',
+          price: 1500.0,
+          quantity: 100,
+          totalAmount: 150000.0,
+          entryMode: 'NORMAL',
+        ),
+      );
+
+      // Rights issue allotted at discounted price of Rs 1,257
+      await db.stocksDao.insertTransaction(
+        StockTransactionsCompanion.insert(
+          cardId: cardId,
+          date: DateTime(2020, 6, 10),
+          type: 'BUY',
+          price: 1257.0,
+          quantity: 15,
+          totalAmount: 18855.0,
+          entryMode: 'RIGHTS',
+        ),
+      );
+
+      // Tender buyback accepted at Rs 2,000
+      await db.stocksDao.insertTransaction(
+        StockTransactionsCompanion.insert(
+          cardId: cardId,
+          date: DateTime(2021, 3, 1),
+          type: 'SELL',
+          price: 2000.0,
+          quantity: 15,
+          totalAmount: 30000.0,
+          entryMode: 'BUYBACK',
+        ),
+      );
+
+      final txs = await db.stocksDao.getTransactionsForCard(cardId);
+      final records = txs.map((t) => TxRecord(
+        id: t.id,
+        type: t.type,
+        date: t.date,
+        price: t.price,
+        quantity: t.quantity,
+        totalAmount: t.totalAmount,
+      )).toList();
+
+      final state = computeHoldingState(records);
+      expect(state.quantityHeld, 100);
+      expect(state.investedValue, 146830.43);
+      expect(txs.any((t) => t.entryMode == 'RIGHTS'), isTrue);
+      expect(txs.any((t) => t.entryMode == 'BUYBACK'), isTrue);
+    });
   });
 }

@@ -17,6 +17,7 @@ import '../services/price_service.dart';
 import '../utils/app_constants.dart';
 import '../widgets/tag_chip.dart';
 import 'add_transaction_sheet.dart';
+import 'corporate_actions_wizard.dart';
 import 'widgets/delete_stock_card_dialog.dart';
 
 class StockCardDetail extends StatefulWidget {
@@ -732,7 +733,15 @@ class StockCardDetailState extends State<StockCardDetail> {
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             onSelected: (value) async {
-              if (value == 'delete') {
+              if (value == 'corporate_action') {
+                final executed = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => CorporateActionsWizardDialog(parentCard: card),
+                );
+                if (executed == true && mounted) {
+                  await checkDividends(card, force: true);
+                }
+              } else if (value == 'delete') {
                 final deleted = await confirmAndDeleteStockCard(
                   context: context,
                   card: card,
@@ -743,6 +752,17 @@ class StockCardDetailState extends State<StockCardDetail> {
               }
             },
             itemBuilder: (ctx) => [
+              const PopupMenuItem<String>(
+                value: 'corporate_action',
+                child: Row(
+                  children: [
+                    Icon(Icons.hub_outlined, size: 20),
+                    SizedBox(width: 12),
+                    Text('Corporate Action Wizard', style: TextStyle(fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
               PopupMenuItem<String>(
                 value: 'delete',
                 child: Row(
@@ -1441,6 +1461,9 @@ class _TransactionRow extends StatelessWidget {
       );
     }
 
+    final isRights = tx.entryMode.toUpperCase() == 'RIGHTS';
+    final isBuyback = tx.entryMode.toUpperCase() == 'BUYBACK';
+
     return Dismissible(
       key: Key('tx_${tx.id}'),
       direction: DismissDirection.endToStart,
@@ -1456,11 +1479,22 @@ class _TransactionRow extends StatelessWidget {
       },
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor:
-              isBuy ? const Color(0xFF1B8A4C).withValues(alpha: 0.15) : cs.errorContainer,
+          backgroundColor: isRights
+              ? Colors.teal.withValues(alpha: 0.15)
+              : (isBuyback
+                  ? Colors.deepOrange.withValues(alpha: 0.15)
+                  : (isBuy ? const Color(0xFF1B8A4C).withValues(alpha: 0.15) : cs.errorContainer)),
           child: Icon(
-            isBuy ? Icons.trending_up : Icons.trending_down,
-            color: isBuy ? const Color(0xFF1B8A4C) : cs.error,
+            isRights
+                ? Icons.assignment_turned_in_outlined
+                : (isBuyback
+                    ? Icons.currency_exchange
+                    : (isBuy ? Icons.trending_up : Icons.trending_down)),
+            color: isRights
+                ? Colors.teal
+                : (isBuyback
+                    ? Colors.deepOrange
+                    : (isBuy ? const Color(0xFF1B8A4C) : cs.error)),
             size: 18,
           ),
         ),
@@ -1470,7 +1504,11 @@ class _TransactionRow extends StatelessWidget {
               tx.type,
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                color: isBuy ? const Color(0xFF1B8A4C) : cs.error,
+                color: isRights
+                    ? Colors.teal
+                    : (isBuyback
+                        ? Colors.deepOrange
+                        : (isBuy ? const Color(0xFF1B8A4C) : cs.error)),
               ),
             ),
             const SizedBox(width: 8),
@@ -1487,11 +1525,44 @@ class _TransactionRow extends StatelessWidget {
                         color: cs.onTertiaryContainer,
                         fontWeight: FontWeight.w600)),
               ),
+            if (isRights)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text('RIGHTS ISSUE',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.teal,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3)),
+              ),
+            if (isBuyback)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.deepOrange.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text('TENDER BUYBACK',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.deepOrange,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3)),
+              ),
           ],
         ),
         subtitle: Text(
-          isAvg ? '(avg entry) · ${tx.quantity} shares @ ₹${fmt.format(tx.price)}'
-              : '${dateFmt.format(tx.date)} · ${tx.quantity} shares @ ₹${fmt.format(tx.price)}',
+          isAvg
+              ? '(avg entry) · ${tx.quantity} shares @ ₹${fmt.format(tx.price)}'
+              : (isRights
+                  ? '${dateFmt.format(tx.date)} · ${tx.quantity} shares allotted @ ₹${fmt.format(tx.price)}'
+                  : (isBuyback
+                      ? '${dateFmt.format(tx.date)} · ${tx.quantity} shares accepted @ ₹${fmt.format(tx.price)}'
+                      : '${dateFmt.format(tx.date)} · ${tx.quantity} shares @ ₹${fmt.format(tx.price)}')),
           style: const TextStyle(fontSize: 13),
         ),
         trailing: Row(

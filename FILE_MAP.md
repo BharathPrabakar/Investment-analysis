@@ -166,6 +166,11 @@
   - **Key Symbols:** `AddTransactionSheet`
   - **Dependents / Links:** [stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart), [price_service.dart](file:///c:/my_new_app/lib/services/price_service.dart)
 
+* [lib/stocks/corporate_actions_wizard.dart](file:///c:/my_new_app/lib/stocks/corporate_actions_wizard.dart)
+  - **Purpose:** Special Corporate Actions Wizard dialog supporting Indian tax-compliant Demergers (spin-offs with cost apportionment under Sec 49(2C)) and Mergers (amalgamations with share swap ratios and fractional cash settlement).
+  - **Key Symbols:** `CorporateActionsWizardDialog`, `CorporateActionType`
+  - **Dependents / Links:** [stock_card_detail.dart](file:///c:/my_new_app/lib/stocks/stock_card_detail.dart), [stocks_dao.dart](file:///c:/my_new_app/lib/database/daos/stocks_dao.dart), [local_tickers.dart](file:///c:/my_new_app/lib/data/local_tickers.dart)
+
 * [lib/stocks/widgets/delete_stock_card_dialog.dart](file:///c:/my_new_app/lib/stocks/widgets/delete_stock_card_dialog.dart)
   - **Purpose:** Confirmation dialog with permanent warning and transaction count before cascading deletion of a stock card and all associated records.
   - **Key Symbols:** `confirmAndDeleteStockCard(context, card, [transactionCount])`

@@ -139,6 +139,8 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
 
   Future<void> _fetchPriceRange() async {
     final curDate = _date;
+    // NORMAL mode requires traded market high/low price range.
+    // AVG, RIGHTS (corporate discounted entitlement), and BUYBACK (fixed tender offer) bypass secondary market day range.
     if (_entryMode != 'NORMAL' || _calendarStatus != TradingDayStatus.open) {
       setState(() {
         _priceRange = null;
@@ -518,20 +520,32 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                 ],
                 selected: {_type},
                 onSelectionChanged: (s) => setState(() {
-                _type = s.first;
-                // Clear sell error when switching back to Buy.
-                _sellValidationError = null;
-              }),
+                  _type = s.first;
+                  // If switching to SELL while in RIGHTS, reset to NORMAL
+                  if (_type == 'SELL' && _entryMode == 'RIGHTS') {
+                    _entryMode = 'NORMAL';
+                  }
+                  // If switching to BUY while in BUYBACK, reset to NORMAL
+                  if (_type == 'BUY' && _entryMode == 'BUYBACK') {
+                    _entryMode = 'NORMAL';
+                  }
+                  // Clear sell error when switching.
+                  _sellValidationError = null;
+                }),
               ),
               const SizedBox(height: 16),
 
               // ── Entry mode toggle ──────────────────────────────────────────
-              _SectionLabel(label: 'Entry Mode'),
+              _SectionLabel(label: 'Transaction Mode / Category'),
               const SizedBox(height: 6),
               SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'NORMAL', label: Text('Normal')),
-                  ButtonSegment(value: 'AVG', label: Text('Avg Price')),
+                segments: [
+                  const ButtonSegment(value: 'NORMAL', label: Text('Market Trade')),
+                  const ButtonSegment(value: 'AVG', label: Text('Avg Price')),
+                  if (_type == 'BUY')
+                    const ButtonSegment(value: 'RIGHTS', label: Text('Rights Issue')),
+                  if (_type == 'SELL')
+                    const ButtonSegment(value: 'BUYBACK', label: Text('Tender Buyback')),
                 ],
                 selected: {_entryMode},
                 onSelectionChanged: (s) {
@@ -540,6 +554,9 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                     _entryMode = newMode;
                     if (_entryMode == 'AVG') {
                       _date = DateTime.now();
+                      _priceRange = null;
+                      _fetchError = null;
+                    } else if (_entryMode == 'RIGHTS' || _entryMode == 'BUYBACK') {
                       _priceRange = null;
                       _fetchError = null;
                     }
@@ -673,7 +690,11 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                           : (_priceRange != null
                               ? 'Range: ₹${_fmt.format(_priceRange!.low)} – ₹${_fmt.format(_priceRange!.high)}'
                               : 'Enter price'))
-                      : 'Enter price',
+                      : (_entryMode == 'RIGHTS'
+                          ? 'Enter rights issue allotment price'
+                          : (_entryMode == 'BUYBACK'
+                              ? 'Enter tender offer price'
+                              : 'Enter average price')),
                 ),
                 validator: (v) {
                   if (v == null || v.isEmpty) return 'Required';
@@ -681,6 +702,8 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                   if (price == null) return 'Enter a valid price';
                   if (_entryMode == 'AVG') {
                     if (price < 0) return 'Price cannot be negative';
+                  } else if (_entryMode == 'RIGHTS' || _entryMode == 'BUYBACK') {
+                    if (price <= 0) return 'Price must be greater than zero';
                   } else {
                     if (price <= 0) return 'Enter a valid price';
                     if (_priceRange == null) {
