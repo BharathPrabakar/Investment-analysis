@@ -10,3 +10,6 @@
 >    - You **MUST proactively delete all orphaned functions, unused parameters/variables, deprecated methods, dead imports, and obsolete files**.
 >    - Do not leave unused code commented out or lingering as zombie files.
 >    - If a refactored component makes an existing service, helper, or widget redundant, delete the dead code immediately and update [FILE_MAP.md](FILE_MAP.md).
+> 7. **COMMITS & REPO SYNCHRONIZATION:**
+>    - Every task or feature completion must be committed and pushed to `origin main` (`BharathPrabakar/Investment-analysis`).
+>    - You **MUST update [COMMITS_HISTORY.md](COMMITS_HISTORY.md)** with the new commit hash, short summary, and an itemized description of what was changed and why.

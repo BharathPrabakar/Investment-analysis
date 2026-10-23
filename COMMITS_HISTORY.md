@@ -5,7 +5,15 @@
 
 ---
 
-### `a6bb34b` — 2026-10-23
+### `828e110` — 2026-10-23
+**Message:** `docs: formalize commit logging and push requirements in agent instructions`
+
+- Updated [AGENTS.md](file:///c:/my_new_app/AGENTS.md) Rule #7 mandating that every completed task/feature be pushed to `origin main` and logged in [COMMITS_HISTORY.md](file:///c:/my_new_app/COMMITS_HISTORY.md).
+- Added Section 0 in [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md) detailing documentation and directive files.
+
+---
+
+### `2b18ad0` — 2026-10-23
 **Message:** `docs: add COMMITS_HISTORY.md tracking all commit hashes and changes`
 
 - Created [COMMITS_HISTORY.md](file:///c:/my_new_app/COMMITS_HISTORY.md) to log every commit ID, timestamp, and human-readable explanation of features, refactors, and bugfixes.

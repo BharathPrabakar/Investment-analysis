@@ -6,6 +6,26 @@
 
 ---
 
+## 0. Documentation & System Directives
+
+* [AGENTS.md](file:///c:/my_new_app/AGENTS.md)
+  - **Purpose:** Mandatory agent rules and operational constraints (session startup reading, zero dead code, remote git push discipline).
+  - **Dependents / Links:** Consulted by all AI agents.
+
+* [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md)
+  - **Purpose:** Comprehensive architecture guide, technology stack, database schema definitions, and feature contracts.
+  - **Dependents / Links:** [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md)
+
+* [FILE_MAP.md](file:///c:/my_new_app/FILE_MAP.md)
+  - **Purpose:** Rapid-reference file and symbol index for targeted edits with minimal token consumption.
+  - **Dependents / Links:** [AGENTS.md](file:///c:/my_new_app/AGENTS.md), [PROJECT_OVERVIEW.md](file:///c:/my_new_app/PROJECT_OVERVIEW.md)
+
+* [COMMITS_HISTORY.md](file:///c:/my_new_app/COMMITS_HISTORY.md)
+  - **Purpose:** Human-readable ledger of all git commits, tracking commit hashes, timestamps, and detailed descriptions of what was changed and why.
+  - **Dependents / Links:** [AGENTS.md](file:///c:/my_new_app/AGENTS.md)
+
+---
+
 ## 1. Top-Level / Core
 
 * [lib/main.dart](file:///c:/my_new_app/lib/main.dart)
